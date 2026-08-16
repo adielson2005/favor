@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Brand } from "@/src/components/Logo";
 import { fonts } from "@/src/hooks/use-app-fonts";
 import { useBreakpoint } from "@/src/hooks/use-breakpoint";
+import { useRequireAuth } from "@/src/hooks/use-require-auth";
 import { space, useTheme } from "@/src/theme";
 
 const SIDEBAR_WIDTH = 232;
@@ -111,6 +112,7 @@ function Sidebar() {
 export default function TabsLayout() {
   const { colors } = useTheme();
   const { isDesktop } = useBreakpoint();
+  useRequireAuth();
   return (
     <View style={{ flex: 1, flexDirection: "row", backgroundColor: colors.bg }}>
       {isDesktop && <Sidebar />}

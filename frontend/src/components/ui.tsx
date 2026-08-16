@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import React from "react";
-import { ActivityIndicator, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, TextInputProps, View } from "react-native";
+import { ActivityIndicator, Image, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, TextInputProps, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { fonts } from "@/src/hooks/use-app-fonts";
@@ -69,9 +69,12 @@ export function Stars({ value, size = 16, onChange }: { value: number; size?: nu
   );
 }
 
-export function Avatar({ name, initials, size = 44 }: { name?: string; initials?: string; size?: number }) {
+export function Avatar({ name, initials, size = 44, photo }: { name?: string; initials?: string; size?: number; photo?: string | null }) {
   const { colors } = useTheme();
   const label = initials || (name || "?").split(" ").map((w) => w[0]).slice(0, 2).join("").toUpperCase();
+  if (photo) {
+    return <Image source={{ uri: photo }} style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: colors.alt }} />;
+  }
   return (
     <View style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: colors.primarySoft, alignItems: "center", justifyContent: "center" }}>
       <Text style={{ color: colors.primary, fontFamily: fonts.bodyBold, fontSize: size * 0.36 }}>{label}</Text>

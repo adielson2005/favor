@@ -1,6 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 
-import { api, setAuthToken, User } from "@/src/api";
+import { api, markAuthReady, setAuthToken, User } from "@/src/api";
 import { storage } from "@/src/utils/storage";
 
 const TOKEN_KEY = "faze:token";
@@ -14,6 +14,8 @@ type AuthState = {
   loginWithGoogle: (idToken: string, cityId?: string) => Promise<void>;
   logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
+  changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
+  deleteAccount: () => Promise<void>;
 };
 
 const AuthContext = createContext<AuthState>(null as never);
@@ -32,8 +34,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     (async () => {
       const stored = await storage.secureGet(TOKEN_KEY, "");
+      if (stored) setAuthToken(stored);
+      // authToken is now settled to its stored value (or null) — safe to unblock every
+      // other request() caller. Must happen BEFORE the /auth/me verification call below,
+      // since that call itself goes through request(), which awaits this same promise.
+      markAuthReady();
       if (stored) {
-        setAuthToken(stored);
         try {
           const me = await api.get("/auth/me");
           setToken(stored);
@@ -65,6 +71,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     applySession(data.token, data.user);
   }, [applySession]);
 
+  const changePassword = useCallback(async (currentPassword: string, newPassword: string) => {
+    await api.post("/auth/change-password", { current_password: currentPassword, new_password: newPassword });
+  }, []);
+
+  const deleteAccount = useCallback(async () => {
+    await api.del("/auth/me");
+    await storage.secureRemove(TOKEN_KEY);
+    setAuthToken(null);
+    setToken(null);
+    setUser(null);
+  }, []);
+
   const logout = useCallback(async () => {
     await storage.secureRemove(TOKEN_KEY);
     setAuthToken(null);
@@ -79,7 +97,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch { /* keep last known user */ }
   }, []);
 
-  const value = useMemo(() => ({ ready, token, user, login, register, loginWithGoogle, logout, refreshUser }), [ready, token, user, login, register, loginWithGoogle, logout, refreshUser]);
+  const value = useMemo(() => ({ ready, token, user, login, register, loginWithGoogle, logout, refreshUser, changePassword, deleteAccount }),
+    [ready, token, user, login, register, loginWithGoogle, logout, refreshUser, changePassword, deleteAccount]);
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 

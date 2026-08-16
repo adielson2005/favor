@@ -6,16 +6,17 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { api } from "@/src/api";
 import { useAuth } from "@/src/auth";
-import { Btn, Chip } from "@/src/components/ui";
-import { useTheme } from "@/src/theme";
+import { Btn, Chip, Field } from "@/src/components/ui";
+import { space, useTheme } from "@/src/theme";
 import { safeBack } from "@/src/utils/navigation";
 
-type Section = "overview" | "users" | "orders" | "categories" | "geo" | "reports" | "audit";
+type Section = "overview" | "users" | "orders" | "categories" | "geo" | "reports" | "withdrawals" | "disputes" | "config" | "audit";
 const SECTIONS: { key: Section; label: string }[] = [
   { key: "overview", label: "Visão geral" }, { key: "users", label: "Usuários" },
   { key: "orders", label: "Pedidos" }, { key: "categories", label: "Categorias" },
   { key: "geo", label: "Localidades" }, { key: "reports", label: "Denúncias" },
-  { key: "audit", label: "Auditoria" },
+  { key: "withdrawals", label: "Saques" }, { key: "disputes", label: "Disputas" },
+  { key: "config", label: "Comissão" }, { key: "audit", label: "Auditoria" },
 ];
 const HOOD_KINDS = ["bairro", "complexo", "regiao", "distrito", "localidade"];
 
@@ -29,7 +30,8 @@ export default function Admin() {
 
   const ENDPOINTS: Record<Section, string> = {
     overview: "/admin/overview", users: "/admin/users", orders: "/admin/orders",
-    categories: "/admin/categories", geo: "/admin/geo", reports: "/admin/reports", audit: "/admin/audit",
+    categories: "/admin/categories", geo: "/admin/geo", reports: "/admin/reports",
+    withdrawals: "/admin/withdrawals", disputes: "/admin/disputes", config: "/admin/config", audit: "/admin/audit",
   };
 
   const load = useCallback(async () => {
@@ -88,6 +90,7 @@ export default function Admin() {
               <View style={{ flex: 1 }}><Btn small variant={user.blocked ? "secondary" : "danger"} title={user.blocked ? "Desbloquear" : "Bloquear"} onPress={() => act(() => api.post(`/admin/users/${user.id}/block`))} /></View>
               <View style={{ flex: 1 }}><Btn small variant="secondary" title={user.verified_identity ? "Remover selo" : "Verificar"} onPress={() => act(() => api.post(`/admin/users/${user.id}/verify`))} /></View>
             </View>
+            <WalletAdjust userId={user.id} act={act} />
           </View>
         ))}
 
@@ -117,6 +120,46 @@ export default function Admin() {
             {report.status === "open" && <Btn small variant="secondary" title="Marcar como resolvida" onPress={() => act(() => api.post(`/admin/reports/${report.id}/resolve`))} />}
           </View>
         )))}
+
+        {section === "withdrawals" && Array.isArray(data) && (data.length === 0 ? (
+          <Text style={{ color: colors.muted, fontSize: 14, textAlign: "center", marginTop: 24 }}>Nenhum saque solicitado.</Text>
+        ) : data.map((w: any) => (
+          <View key={w.id} style={{ backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderRadius: 16, padding: 14, gap: 8 }}>
+            <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+              <Text style={{ color: colors.ink, fontSize: 15, fontWeight: "800" }}>R$ {w.amount.toFixed(2)}</Text>
+              <Text style={{ color: w.status === "COMPLETED" ? colors.green : w.status === "FAILED" || w.status === "CANCELLED" ? colors.danger : colors.amber, fontSize: 12, fontWeight: "700" }}>{w.status}</Text>
+            </View>
+            <Text style={{ color: colors.muted, fontSize: 12 }}>{w.bank_account_snapshot?.holder_name} · {w.bank_account_snapshot?.account_number_masked}</Text>
+            <Text style={{ color: colors.faint, fontSize: 11 }}>Risco: {w.risk_level} · {new Date(w.created_at).toLocaleString("pt-BR")}</Text>
+            {["PENDING", "REVIEW_REQUIRED"].includes(w.status) && (
+              <View style={{ flexDirection: "row", gap: 8 }}>
+                <View style={{ flex: 1 }}><Btn small title="Aprovar" onPress={() => act(() => api.post(`/admin/withdrawals/${w.id}/approve`))} /></View>
+                <View style={{ flex: 1 }}><Btn small variant="danger" title="Recusar" onPress={() => act(() => api.post(`/admin/withdrawals/${w.id}/reject`, { reason: "Recusado pela administração" }))} /></View>
+              </View>
+            )}
+          </View>
+        )))}
+
+        {section === "disputes" && Array.isArray(data) && (data.length === 0 ? (
+          <Text style={{ color: colors.muted, fontSize: 14, textAlign: "center", marginTop: 24 }}>Nenhuma disputa registrada.</Text>
+        ) : data.map((d: any) => (
+          <View key={d.id} style={{ backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderRadius: 16, padding: 14, gap: 8 }}>
+            <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+              <Text style={{ color: colors.ink, fontSize: 14, fontWeight: "700", flex: 1 }}>{d.reason}</Text>
+              <Text style={{ color: d.status === "RESOLVED" ? colors.green : d.status === "CANCELLED" ? colors.faint : colors.amber, fontSize: 11, fontWeight: "700" }}>{d.status}</Text>
+            </View>
+            {d.description ? <Text style={{ color: colors.muted, fontSize: 13 }}>{d.description}</Text> : null}
+            <Text style={{ color: colors.faint, fontSize: 11 }}>Por {d.reporter_name} · pedido {d.order_id.slice(0, 8)}</Text>
+            {["OPEN", "UNDER_REVIEW"].includes(d.status) && (
+              <View style={{ flexDirection: "row", gap: 8 }}>
+                <View style={{ flex: 1 }}><Btn small title="Resolver + reembolsar" onPress={() => act(() => api.patch(`/admin/disputes/${d.id}`, { status: "RESOLVED", resolution: "Reembolso concedido", refund: true }))} /></View>
+                <View style={{ flex: 1 }}><Btn small variant="secondary" title="Resolver sem reembolso" onPress={() => act(() => api.patch(`/admin/disputes/${d.id}`, { status: "RESOLVED", resolution: "Sem reembolso", refund: false }))} /></View>
+              </View>
+            )}
+          </View>
+        )))}
+
+        {section === "config" && data && <CommissionConfig data={data} act={act} />}
 
         {section === "audit" && Array.isArray(data) && (data.length === 0 ? (
           <Text style={{ color: colors.muted, fontSize: 14, textAlign: "center", marginTop: 24 }}>Nenhuma ação registrada ainda.</Text>
@@ -214,6 +257,58 @@ function GeoRow({ name, active, onToggle }: { name: string; active: boolean; onT
     <View style={{ flexDirection: "row", alignItems: "center", gap: 10, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 8 }}>
       <Text style={{ color: colors.ink, fontSize: 13, fontWeight: "600", flex: 1 }}>{name}</Text>
       <Switch value={active} onValueChange={onToggle} trackColor={{ true: colors.primary }} />
+    </View>
+  );
+}
+
+function WalletAdjust({ userId, act }: { userId: string; act: (fn: () => Promise<any>) => void }) {
+  const { colors } = useTheme();
+  const [open, setOpen] = useState(false);
+  const [amount, setAmount] = useState("");
+  const [reason, setReason] = useState("");
+
+  if (!open) {
+    return <Btn small variant="secondary" title="Ajustar saldo (teste)" onPress={() => setOpen(true)} />;
+  }
+  return (
+    <View style={{ gap: 8, backgroundColor: colors.alt, borderRadius: 12, padding: 10 }}>
+      <Text style={{ color: colors.faint, fontSize: 11 }}>Cria um ADJUSTMENT auditado — use para crédito de teste ou correção.</Text>
+      <View style={{ flexDirection: "row", gap: 8 }}>
+        <TextInput value={amount} onChangeText={setAmount} placeholder="Valor (+/-)" placeholderTextColor={colors.faint} keyboardType="numbers-and-punctuation"
+          style={{ flex: 1, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderRadius: 10, paddingHorizontal: 10, height: 38, color: colors.ink, fontSize: 12 }} />
+        <TextInput value={reason} onChangeText={setReason} placeholder="Motivo" placeholderTextColor={colors.faint}
+          style={{ flex: 1, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderRadius: 10, paddingHorizontal: 10, height: 38, color: colors.ink, fontSize: 12 }} />
+      </View>
+      <View style={{ flexDirection: "row", gap: 8 }}>
+        <View style={{ flex: 1 }}>
+          <Btn small title="Aplicar" disabled={!Number(amount) || !reason.trim()} onPress={() => {
+            act(() => api.post(`/admin/wallets/${userId}/adjust`, { user_id: userId, amount: Number(amount), reason: reason.trim() }));
+            setOpen(false); setAmount(""); setReason("");
+          }} />
+        </View>
+        <View style={{ flex: 1 }}><Btn small variant="ghost" title="Cancelar" onPress={() => setOpen(false)} /></View>
+      </View>
+    </View>
+  );
+}
+
+function CommissionConfig({ data, act }: { data: any; act: (fn: () => Promise<any>) => void }) {
+  const { colors } = useTheme();
+  const [commission, setCommission] = useState(String(data.commission_percent ?? ""));
+  const [minWithdrawal, setMinWithdrawal] = useState(String(data.min_withdrawal ?? ""));
+  const [maxWithdrawalDay, setMaxWithdrawalDay] = useState(String(data.max_withdrawal_per_day ?? ""));
+  const [maxDeposit, setMaxDeposit] = useState(String(data.max_deposit_per_transaction ?? ""));
+
+  return (
+    <View style={{ gap: space.md }}>
+      <Field label="Comissão FAZÊ (%)" value={commission} onChangeText={setCommission} keyboardType="numeric" />
+      <Field label="Saque mínimo (R$)" value={minWithdrawal} onChangeText={setMinWithdrawal} keyboardType="numeric" />
+      <Field label="Limite de saque por dia (R$)" value={maxWithdrawalDay} onChangeText={setMaxWithdrawalDay} keyboardType="numeric" />
+      <Field label="Limite de depósito por transação (R$)" value={maxDeposit} onChangeText={setMaxDeposit} keyboardType="numeric" />
+      <Btn title="Salvar configuração" onPress={() => act(() => api.patch("/admin/config", {
+        commission_percent: Number(commission), min_withdrawal: Number(minWithdrawal),
+        max_withdrawal_per_day: Number(maxWithdrawalDay), max_deposit_per_transaction: Number(maxDeposit),
+      }))} />
     </View>
   );
 }

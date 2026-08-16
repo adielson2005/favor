@@ -1,12 +1,28 @@
 import re
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 
-from auth import get_current_user, get_optional_user
+from auth import get_current_user, get_optional_user, rate_limit
 from database import db, new_id, now
-from models import (BlockCreate, FavoriteToggle, MessageCreate, OrderCreate,
-                    ProfileUpdate, ProposalCreate, ReportCreate, ReviewCreate)
+from models import (BlockCreate, FavoriteToggle, MessageCreate, OrderCreate, OrderUpdate,
+                    PayOrderIn, ProfileUpdate, ProposalCreate, ReportCreate, ReviewCreate)
+from wallet import (
+    InsufficientFundsError, credit_wallet, debit_wallet, get_commission_config,
+    move_bucket, to_cents, to_reais, transaction_public,
+)
+
+MAX_IMAGE_B64_CHARS = 2_000_000  # ~1.4MB decoded — generous for a chat photo, cheap to reject before it hits Mongo
+ALLOWED_IMAGE_PREFIXES = ("data:image/jpeg", "data:image/jpg", "data:image/png", "data:image/webp")
+
+
+def validate_image_b64(value: Optional[str], field: str = "imagem"):
+    if not value:
+        return
+    if not value.startswith(ALLOWED_IMAGE_PREFIXES):
+        raise HTTPException(400, f"Formato de {field} não suportado. Use JPEG, PNG ou WebP.")
+    if len(value) > MAX_IMAGE_B64_CHARS:
+        raise HTTPException(400, f"Essa {field} é muito grande. Envie um arquivo menor.")
 
 router = APIRouter()
 
@@ -32,7 +48,7 @@ def user_level(user: dict) -> str:
 def public_user(user: Optional[dict]) -> Optional[dict]:
     if not user:
         return None
-    return {k: user.get(k) for k in ("id", "name", "initials", "bio", "rating", "rating_count", "jobs_done", "city_id", "neighborhood_id", "preference", "verified_email", "verified_phone", "verified_identity", "member_since", "is_admin")} | {"level": user_level(user)}
+    return {k: user.get(k) for k in ("id", "name", "initials", "bio", "rating", "rating_count", "jobs_done", "city_id", "neighborhood_id", "preference", "avatar_b64", "verified_email", "verified_phone", "verified_identity", "member_since", "is_admin")} | {"level": user_level(user)}
 
 
 async def ref_maps():
@@ -136,6 +152,7 @@ async def get_user(user_id: str):
 async def update_user(user_id: str, body: ProfileUpdate, current=Depends(get_current_user)):
     if current["id"] != user_id and not current.get("is_admin"):
         raise HTTPException(403, "Você só pode editar o seu próprio perfil")
+    validate_image_b64(body.avatar_b64, "foto")
     data = {k: v for k, v in body.model_dump().items() if v is not None}
     if data:
         await db.users.update_one({"id": user_id}, {"$set": data})
@@ -157,7 +174,7 @@ async def list_orders(city_id: Optional[str] = None, category_id: Optional[str] 
                       neighborhood_id: Optional[str] = None, type: Optional[str] = None,
                       q: Optional[str] = None, status: Optional[str] = None,
                       client_id: Optional[str] = None, worker_id: Optional[str] = None,
-                      max_budget: Optional[float] = None, limit: int = 60,
+                      max_budget: Optional[float] = None, limit: int = 20, offset: int = 0,
                       current: Optional[dict] = Depends(get_optional_user)):
     query: dict = {}
     if city_id:
@@ -194,12 +211,18 @@ async def list_orders(city_id: Optional[str] = None, category_id: Optional[str] 
             {"subcategory_id": {"$in": sub_ids}},
             {"category_id": {"$in": cat_ids}},
         ]
-    orders = await db.orders.find(query, {"_id": 0}).sort("created_at", -1).to_list(min(limit, 100))
+    # Kept as a plain array (not {items, total}) so every existing caller keeps working —
+    # the frontend infers "more pages" by checking whether a full page came back.
+    cursor = db.orders.find(query, {"_id": 0}).sort("created_at", -1).skip(max(offset, 0))
+    orders = await cursor.to_list(min(limit, 100))
     return await enrich_orders(orders)
 
 
 @router.post("/orders")
 async def create_order(body: OrderCreate, current=Depends(get_current_user)):
+    rate_limit(f"create-order:{current['id']}", max_attempts=20, window_seconds=600)
+    for photo in body.photos:
+        validate_image_b64(photo, "foto")
     order = body.model_dump()
     order.update({"id": new_id(), "status": "published", "worker_id": None, "client_id": current["id"],
                   "reviewed_by_client": False, "reviewed_by_worker": False,
@@ -216,14 +239,104 @@ async def get_order(order_id: str):
     return (await enrich_orders([order]))[0]
 
 
+@router.patch("/orders/{order_id}")
+async def update_order(order_id: str, body: OrderUpdate, current=Depends(get_current_user)):
+    order = await db.orders.find_one({"id": order_id})
+    if not order:
+        raise HTTPException(404, "Pedido não encontrado")
+    if order["client_id"] != current["id"]:
+        raise HTTPException(403, "Apenas quem pediu pode editar este pedido")
+    if order["status"] != "published":
+        raise HTTPException(400, "Só é possível editar enquanto o pedido está recebendo propostas")
+    data = {k: v for k, v in body.model_dump().items() if v is not None}
+    if "photos" in data:
+        for photo in data["photos"]:
+            validate_image_b64(photo, "foto")
+    if data:
+        await db.orders.update_one({"id": order_id}, {"$set": data})
+    return await get_order(order_id)
+
+
+PLATFORM_WALLET_USER_ID = "platform"
+
+
+@router.post("/orders/{order_id}/pay")
+async def pay_order(order_id: str, body: PayOrderIn, current=Depends(get_current_user), idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key")):
+    rate_limit(f"pay-order:{current['id']}", max_attempts=20, window_seconds=600)
+    order = await db.orders.find_one({"id": order_id})
+    if not order:
+        raise HTTPException(404, "Pedido não encontrado")
+    if order["client_id"] != current["id"]:
+        raise HTTPException(403, "Apenas quem pediu pode pagar por este pedido")
+    if order["status"] != "accepted":
+        raise HTTPException(400, "Este pedido não está pronto para pagamento")
+    if body.method != "wallet":
+        raise HTTPException(501, "Esse método de pagamento ainda não está disponível.")
+
+    # The value is always recomputed here from the order's accepted proposal — the
+    # request body's method choice is the only thing trusted from the frontend.
+    gross_reais = order.get("accepted_amount") or order.get("budget") or 0
+    if gross_reais <= 0:
+        raise HTTPException(400, "Valor do pedido inválido.")
+    gross_cents = to_cents(gross_reais)
+    config = await get_commission_config()
+    commission_cents = round(gross_cents * config["commission_percent"] / 100)
+    worker_net_cents = gross_cents - commission_cents
+
+    payment = {
+        "id": new_id(), "order_id": order_id, "client_id": current["id"], "worker_id": order.get("worker_id"),
+        "gross_amount": to_reais(gross_cents), "commission_amount": to_reais(commission_cents),
+        "worker_net_amount": to_reais(worker_net_cents), "commission_percent": config["commission_percent"],
+        "method": "wallet", "status": "pending", "provider": None, "provider_transaction_id": None,
+        "idempotency_key": idempotency_key, "created_at": now(), "updated_at": now(),
+    }
+    try:
+        # The unique index on payments.order_id is what actually closes the race —
+        # two concurrent /pay calls for the same order can't both get past this insert,
+        # so at most one ever reaches the wallet debit below.
+        await db.payments.insert_one(dict(payment))
+    except Exception:
+        existing_payment = await db.payments.find_one({"order_id": order_id}, {"_id": 0})
+        if existing_payment and idempotency_key and existing_payment.get("idempotency_key") == idempotency_key:
+            return existing_payment
+        raise HTTPException(400, "Este pedido já possui um pagamento")
+
+    try:
+        await debit_wallet(current["id"], gross_cents, "PAYMENT", reference_type="order", reference_id=order_id,
+                            bucket="available", description=f"Pagamento — {order['title']}")
+    except InsufficientFundsError:
+        await db.payments.delete_one({"id": payment["id"]})
+        raise HTTPException(400, "Saldo insuficiente. Deposite para continuar — outros métodos de pagamento ainda não estão disponíveis.")
+
+    await db.payments.update_one({"id": payment["id"]}, {"$set": {"status": "held", "updated_at": now()}})
+    payment["status"] = "held"
+    await notify(current["id"], "Pagamento confirmado", "O valor ficará protegido até a conclusão do serviço.", "payment", order_id)
+    if order.get("worker_id"):
+        await notify(order["worker_id"], "Pagamento recebido", f"O cliente pagou por “{order['title']}”. Pode iniciar quando estiver pronto.", "payment", order_id)
+    payment.pop("_id", None)
+    return payment
+
+
+@router.get("/orders/{order_id}/payment")
+async def get_order_payment(order_id: str, current=Depends(get_current_user)):
+    order = await db.orders.find_one({"id": order_id})
+    if not order:
+        raise HTTPException(404, "Pedido não encontrado")
+    if current["id"] not in (order["client_id"], order.get("worker_id")):
+        raise HTTPException(403, "Você não participa deste pedido")
+    return await db.payments.find_one({"order_id": order_id}, {"_id": 0})
+
+
 @router.post("/orders/{order_id}/start")
 async def start_order(order_id: str, current=Depends(get_current_user)):
     order = await db.orders.find_one({"id": order_id})
     if not order:
         raise HTTPException(404, "Pedido não encontrado")
-    if current["id"] not in (order.get("worker_id"), order["client_id"]):
-        raise HTTPException(403, "Você não participa deste pedido")
-    await db.orders.update_one({"id": order_id}, {"$set": {"status": "in_progress", "started_at": now()}})
+    if current["id"] != order.get("worker_id"):
+        raise HTTPException(403, "Apenas o fazedor escolhido pode iniciar o serviço")
+    result = await db.orders.find_one_and_update({"id": order_id, "status": "accepted"}, {"$set": {"status": "in_progress", "started_at": now()}})
+    if not result:
+        raise HTTPException(400, "Este pedido não está mais aguardando início")
     await system_message(order_id, "O serviço está em andamento.")
     await notify(order["client_id"], "Serviço em andamento", "O fazedor começou o seu pedido.", "status", order_id)
     return {"ok": True, "status": "in_progress"}
@@ -236,10 +349,28 @@ async def complete_order(order_id: str, current=Depends(get_current_user)):
         raise HTTPException(404, "Pedido não encontrado")
     if current["id"] != order["client_id"]:
         raise HTTPException(403, "Apenas quem pediu pode concluir")
-    await db.orders.update_one({"id": order_id}, {"$set": {"status": "completed", "completed_at": now()}})
+    result = await db.orders.find_one_and_update({"id": order_id, "status": "in_progress"}, {"$set": {"status": "completed", "completed_at": now()}})
+    if not result:
+        raise HTTPException(400, "Este pedido não está em andamento")
     if order.get("worker_id"):
         await db.users.update_one({"id": order["worker_id"]}, {"$inc": {"jobs_done": 1}})
         await notify(order["worker_id"], "Serviço concluído", f"“{order['title']}” foi marcado como concluído.", "status", order_id)
+    # Legacy/demo orders never had a payment created for them and keep working exactly
+    # as before — only orders that went through /pay have money to release here.
+    payment = await db.payments.find_one({"order_id": order_id, "status": "held"})
+    if payment:
+        worker_cents = to_cents(payment["worker_net_amount"])
+        commission_cents = to_cents(payment["commission_amount"])
+        if payment.get("worker_id") and worker_cents > 0:
+            await credit_wallet(payment["worker_id"], worker_cents, "EARNING", reference_type="order", reference_id=order_id,
+                                 bucket="available", description=f"Ganho — {order['title']}")
+        if commission_cents > 0:
+            await credit_wallet(PLATFORM_WALLET_USER_ID, commission_cents, "COMMISSION", reference_type="order", reference_id=order_id,
+                                 bucket="available", description=f"Comissão — {order['title']}")
+        await db.payments.update_one({"id": payment["id"]}, {"$set": {"status": "released", "updated_at": now()}})
+        await notify(payment["client_id"], "Pagamento liberado", f"O pagamento de “{order['title']}” foi liberado para o fazedor.", "payment", order_id)
+        if payment.get("worker_id"):
+            await notify(payment["worker_id"], "Novo ganho", f"Você recebeu R$ {payment['worker_net_amount']:.2f} por “{order['title']}”.", "earning", order_id)
     await system_message(order_id, "O serviço foi concluído.")
     return {"ok": True, "status": "completed"}
 
@@ -251,7 +382,19 @@ async def cancel_order(order_id: str, current=Depends(get_current_user)):
         raise HTTPException(404, "Pedido não encontrado")
     if current["id"] != order["client_id"]:
         raise HTTPException(403, "Apenas quem pediu pode cancelar")
-    await db.orders.update_one({"id": order_id}, {"$set": {"status": "cancelled", "cancelled_at": now()}})
+    result = await db.orders.find_one_and_update({"id": order_id, "status": {"$in": ["published", "accepted"]}}, {"$set": {"status": "cancelled", "cancelled_at": now()}})
+    if not result:
+        raise HTTPException(400, "Este pedido não pode mais ser cancelado")
+    if order.get("worker_id"):
+        await notify(order["worker_id"], "Pedido cancelado", f"“{order['title']}” foi cancelado por quem pediu.", "status", order_id)
+    payment = await db.payments.find_one({"order_id": order_id, "status": "held"})
+    if payment:
+        refund_cents = to_cents(payment["gross_amount"])
+        if refund_cents > 0:
+            await credit_wallet(payment["client_id"], refund_cents, "REFUND", reference_type="order", reference_id=order_id,
+                                 bucket="available", description=f"Reembolso — {order['title']}")
+        await db.payments.update_one({"id": payment["id"]}, {"$set": {"status": "refunded", "updated_at": now()}})
+        await notify(payment["client_id"], "Reembolso realizado", f"O valor pago em “{order['title']}” foi devolvido para sua carteira.", "refund", order_id)
     return {"ok": True, "status": "cancelled"}
 
 
@@ -267,6 +410,7 @@ async def order_proposals(order_id: str):
 
 @router.post("/orders/{order_id}/proposals")
 async def create_proposal(order_id: str, body: ProposalCreate, current=Depends(get_current_user)):
+    rate_limit(f"create-proposal:{current['id']}", max_attempts=30, window_seconds=600)
     order = await db.orders.find_one({"id": order_id})
     if not order:
         raise HTTPException(404, "Pedido não encontrado")
@@ -284,17 +428,30 @@ async def create_proposal(order_id: str, body: ProposalCreate, current=Depends(g
 
 @router.post("/proposals/{proposal_id}/accept")
 async def accept_proposal(proposal_id: str, current=Depends(get_current_user)):
+    rate_limit(f"accept-proposal:{current['id']}", max_attempts=30, window_seconds=600)
     proposal = await db.proposals.find_one({"id": proposal_id}, {"_id": 0})
     if not proposal:
         raise HTTPException(404, "Proposta não encontrada")
     order = await db.orders.find_one({"id": proposal["order_id"]})
     if not order or order["client_id"] != current["id"]:
         raise HTTPException(403, "Apenas quem pediu pode aceitar propostas")
+    if proposal["status"] != "pending":
+        raise HTTPException(400, "Esta proposta não está mais disponível")
+    # Atomic claim on the order: only succeeds while it's still published, so a double
+    # tap or two near-simultaneous accepts can't both go through and clobber worker_id.
+    claimed = await db.orders.find_one_and_update(
+        {"id": proposal["order_id"], "status": "published"},
+        {"$set": {"status": "accepted", "worker_id": proposal["worker_id"], "accepted_amount": proposal["amount"]}},
+    )
+    if not claimed:
+        raise HTTPException(400, "Este pedido já teve uma proposta aceita.")
+    other_proposals = await db.proposals.find({"order_id": proposal["order_id"], "id": {"$ne": proposal_id}}, {"_id": 0, "worker_id": 1}).to_list(100)
     await db.proposals.update_many({"order_id": proposal["order_id"], "id": {"$ne": proposal_id}}, {"$set": {"status": "rejected"}})
     await db.proposals.update_one({"id": proposal_id}, {"$set": {"status": "accepted"}})
-    await db.orders.update_one({"id": proposal["order_id"]}, {"$set": {"status": "accepted", "worker_id": proposal["worker_id"], "accepted_amount": proposal["amount"]}})
     await system_message(proposal["order_id"], "Você aceitou a proposta.")
     await notify(proposal["worker_id"], "Proposta aceita", f"Sua proposta em “{order['title']}” foi aceita. Já podem conversar.", "accept", proposal["order_id"])
+    for other in other_proposals:
+        await notify(other["worker_id"], "Proposta não aceita", f"Outra proposta foi escolhida para “{order['title']}”.", "reject", proposal["order_id"])
     return proposal | {"status": "accepted"}
 
 
@@ -310,11 +467,13 @@ async def order_messages(order_id: str, current=Depends(get_current_user)):
 
 @router.post("/orders/{order_id}/messages")
 async def send_message(order_id: str, body: MessageCreate, current=Depends(get_current_user)):
+    rate_limit(f"send-message:{current['id']}", max_attempts=120, window_seconds=300)
     order = await db.orders.find_one({"id": order_id})
     if not order:
         raise HTTPException(404, "Pedido não encontrado")
     if current["id"] not in (order["client_id"], order.get("worker_id")):
         raise HTTPException(403, "Você não participa desta conversa")
+    validate_image_b64(body.image_b64)
     message = {"id": new_id(), "order_id": order_id, "sender_id": current["id"],
                "type": "image" if body.image_b64 else "text", "text": body.text,
                "image_b64": body.image_b64, "created_at": now()}
@@ -343,6 +502,7 @@ async def conversations(current=Depends(get_current_user)):
 
 @router.post("/reviews")
 async def create_review(body: ReviewCreate, current=Depends(get_current_user)):
+    rate_limit(f"create-review:{current['id']}", max_attempts=30, window_seconds=600)
     order = await db.orders.find_one({"id": body.order_id})
     if not order:
         raise HTTPException(404, "Pedido não encontrado")
@@ -350,6 +510,10 @@ async def create_review(body: ReviewCreate, current=Depends(get_current_user)):
         raise HTTPException(400, "Avalie apenas após a conclusão")
     if current["id"] not in (order["client_id"], order.get("worker_id")):
         raise HTTPException(403, "Você não participa deste pedido")
+    # The reviewer can only rate the other participant of THIS order — not an arbitrary user id.
+    expected_target = order.get("worker_id") if current["id"] == order["client_id"] else order["client_id"]
+    if body.to_id != expected_target:
+        raise HTTPException(400, "Você só pode avaliar quem participou deste pedido com você")
     flag = "reviewed_by_client" if current["id"] == order["client_id"] else "reviewed_by_worker"
     if order.get(flag):
         raise HTTPException(400, "Você já avaliou este pedido")
@@ -369,6 +533,7 @@ async def create_review(body: ReviewCreate, current=Depends(get_current_user)):
 
 @router.post("/reports")
 async def create_report(body: ReportCreate, current=Depends(get_current_user)):
+    rate_limit(f"create-report:{current['id']}", max_attempts=20, window_seconds=600)
     report = body.model_dump() | {"id": new_id(), "reporter_id": current["id"], "status": "open", "created_at": now()}
     await db.reports.insert_one(dict(report))
     return report
@@ -385,6 +550,7 @@ async def create_block(body: BlockCreate, current=Depends(get_current_user)):
 
 @router.post("/favorites/toggle")
 async def toggle_favorite(body: FavoriteToggle, current=Depends(get_current_user)):
+    rate_limit(f"toggle-favorite:{current['id']}", max_attempts=60, window_seconds=300)
     existing = await db.favorites.find_one({"user_id": current["id"], "order_id": body.order_id})
     if existing:
         await db.favorites.delete_one({"_id": existing["_id"]})

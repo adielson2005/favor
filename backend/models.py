@@ -59,6 +59,19 @@ class OrderCreate(BaseModel):
     fields: dict = {}
 
 
+class OrderUpdate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    category_id: Optional[str] = None
+    subcategory_id: Optional[str] = None
+    neighborhood_id: Optional[str] = None
+    date_label: Optional[str] = None
+    time_label: Optional[str] = None
+    budget: Optional[float] = None
+    photos: Optional[list[str]] = None
+    fields: Optional[dict] = None
+
+
 class ProposalCreate(BaseModel):
     amount: float
     message: str = ""
@@ -78,7 +91,7 @@ class ReviewCreate(BaseModel):
 
 
 class ReportCreate(BaseModel):
-    target_type: str  # user | order
+    target_type: str  # user | order | message
     target_id: str
     reason: str
     details: str = ""
@@ -89,6 +102,12 @@ class ProfileUpdate(BaseModel):
     bio: Optional[str] = None
     city_id: Optional[str] = None
     neighborhood_id: Optional[str] = None
+    avatar_b64: Optional[str] = None
+
+
+class ChangePasswordIn(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=8)
 
 
 class BlockCreate(BaseModel):
@@ -135,3 +154,65 @@ class ActivePatch(BaseModel):
     name: Optional[str] = None
     icon: Optional[str] = None
     kind: Optional[str] = None
+
+
+# ---------- financial ----------
+
+class DepositIn(BaseModel):
+    amount: float = Field(gt=0)
+    method: str = "pix"  # pix | card (card reserved for future use)
+
+
+class BankAccountIn(BaseModel):
+    holder_name: str
+    document: str = Field(min_length=11, max_length=14)  # CPF or CNPJ, digits only
+    bank_code: str
+    agency: str
+    account_number: str
+    account_type: str = "checking"  # checking | savings
+    password: str  # reauthentication — adding a payout destination is high-risk
+
+
+class BankAccountRemoveIn(BaseModel):
+    password: str
+
+
+class WithdrawalIn(BaseModel):
+    amount: float = Field(gt=0)
+    bank_account_id: str
+    password: str  # reauthentication
+
+
+class PayOrderIn(BaseModel):
+    method: str = "wallet"  # wallet is the only method that can actually settle today
+
+
+class DisputeIn(BaseModel):
+    target_type: str  # service | payment | worker | client
+    order_id: str
+    reason: str
+    description: str = ""
+    evidence: list[str] = []
+
+
+class AdminWithdrawalActionIn(BaseModel):
+    reason: str = ""
+
+
+class AdminDisputeActionIn(BaseModel):
+    status: str  # UNDER_REVIEW | RESOLVED | CANCELLED
+    resolution: str = ""
+    refund: bool = False
+
+
+class AdminAdjustmentIn(BaseModel):
+    user_id: str
+    amount: float  # positive = credit, negative = debit
+    reason: str = Field(min_length=3)
+
+
+class CommissionConfigIn(BaseModel):
+    commission_percent: Optional[float] = Field(default=None, ge=0, le=50)
+    min_withdrawal: Optional[float] = Field(default=None, ge=0)
+    max_withdrawal_per_day: Optional[float] = Field(default=None, ge=0)
+    max_deposit_per_transaction: Optional[float] = Field(default=None, ge=0)

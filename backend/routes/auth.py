@@ -10,7 +10,7 @@ from auth import (
 )
 from database import db, new_id, now
 from models import (
-    ForgotPasswordIn, GoogleAuthIn, LoginIn, PreferenceIn, RegisterIn,
+    ChangePasswordIn, ForgotPasswordIn, GoogleAuthIn, LoginIn, PreferenceIn, RegisterIn,
     ResetPasswordIn, VerifyEmailIn,
 )
 
@@ -163,6 +163,31 @@ async def verify_email(body: VerifyEmailIn, user: dict = Depends(get_current_use
     })
     user["verified_email"] = True
     return public_me(user)
+
+
+@router.post("/change-password")
+async def change_password(body: ChangePasswordIn, user: dict = Depends(get_current_user)):
+    rate_limit(f"change-password:{user['id']}")
+    if not verify_password(body.current_password, user.get("password_hash") or ""):
+        raise HTTPException(401, "Senha atual incorreta.")
+    await db.users.update_one({"id": user["id"]}, {"$set": {"password_hash": hash_password(body.new_password)}})
+    await db.notifications.insert_one({
+        "id": new_id(), "user_id": user["id"], "title": "Senha alterada",
+        "body": "Sua senha foi alterada. Se não foi você, entre em contato com o suporte.",
+        "type": "security", "order_id": None, "read": False, "created_at": now(),
+    })
+    return {"message": "Senha alterada com sucesso."}
+
+
+@router.delete("/me")
+async def delete_account(user: dict = Depends(get_current_user)):
+    # Soft delete: anonymize and block login, but keep the row so existing orders,
+    # messages, and reviews that reference this id don't end up pointing at nothing.
+    await db.users.update_one({"id": user["id"]}, {"$set": {
+        "name": "Conta excluída", "email": f"deleted-{user['id']}@faze.local", "password_hash": None,
+        "bio": "", "avatar_b64": None, "blocked": True, "deleted_at": now(),
+    }})
+    return {"message": "Conta excluída."}
 
 
 @router.patch("/preference")

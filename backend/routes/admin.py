@@ -1,14 +1,27 @@
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException
 
 from auth import get_current_admin
 from database import db, new_id, now
-from models import ActivePatch, CategoryIn, GeoCityIn, GeoNeighborhoodIn, GeoStateIn, SubcategoryIn
+from models import (
+    ActivePatch, AdminAdjustmentIn, AdminDisputeActionIn, AdminWithdrawalActionIn,
+    CategoryIn, CommissionConfigIn, GeoCityIn, GeoNeighborhoodIn, GeoStateIn, SubcategoryIn,
+)
+from wallet import (
+    InsufficientFundsError, credit_wallet, debit_wallet, get_commission_config,
+    move_bucket, to_cents, wallet_public,
+)
 
 router = APIRouter(prefix="/admin")
 
 
 async def log_action(admin_id: str, action: str, target: str):
     await db.admin_actions.insert_one({"id": new_id(), "admin_id": admin_id, "action": action, "target": target, "created_at": now()})
+
+
+async def notify(user_id: str, title: str, body: str, kind: str, order_id: Optional[str] = None):
+    await db.notifications.insert_one({"id": new_id(), "user_id": user_id, "title": title, "body": body, "type": kind, "order_id": order_id, "read": False, "created_at": now()})
 
 
 @router.get("/overview")
@@ -172,6 +185,118 @@ async def resolve_report(report_id: str, admin=Depends(get_current_admin)):
     await db.reports.update_one({"id": report_id}, {"$set": {"status": "resolved", "resolved_at": now()}})
     await log_action(admin["id"], "resolve", f"report:{report_id}")
     return {"ok": True}
+
+
+# ---------- financial ----------
+
+@router.get("/wallets/{user_id}")
+async def admin_get_wallet(user_id: str, admin=Depends(get_current_admin)):
+    from wallet import get_or_create_wallet
+    return wallet_public(await get_or_create_wallet(user_id))
+
+
+@router.post("/wallets/{user_id}/adjust")
+async def admin_adjust_wallet(user_id: str, body: AdminAdjustmentIn, admin=Depends(get_current_admin)):
+    if body.amount == 0:
+        raise HTTPException(400, "Informe um valor diferente de zero.")
+    cents = to_cents(abs(body.amount))
+    if body.amount > 0:
+        txn = await credit_wallet(user_id, cents, "ADJUSTMENT", reference_type="admin_adjustment", reference_id=admin["id"], description=body.reason)
+    else:
+        try:
+            txn = await debit_wallet(user_id, cents, "ADJUSTMENT", reference_type="admin_adjustment", reference_id=admin["id"], description=body.reason)
+        except InsufficientFundsError:
+            raise HTTPException(400, "Saldo disponível insuficiente para esse ajuste.")
+    await log_action(admin["id"], "wallet_adjustment", f"user:{user_id}:{body.amount:+.2f}:{body.reason}")
+    await notify(user_id, "Ajuste na carteira", f"Um ajuste de R$ {body.amount:+.2f} foi feito na sua carteira. Motivo: {body.reason}", "adjustment")
+    return txn
+
+
+@router.get("/withdrawals")
+async def admin_list_withdrawals(status: Optional[str] = None, admin=Depends(get_current_admin)):
+    query = {"status": status} if status else {}
+    return await db.withdrawals.find(query, {"_id": 0}).sort("created_at", -1).to_list(200)
+
+
+@router.post("/withdrawals/{withdrawal_id}/approve")
+async def admin_approve_withdrawal(withdrawal_id: str, admin=Depends(get_current_admin)):
+    withdrawal = await db.withdrawals.find_one({"id": withdrawal_id})
+    if not withdrawal:
+        raise HTTPException(404, "Saque não encontrado")
+    if withdrawal["status"] not in ("PENDING", "REVIEW_REQUIRED"):
+        raise HTTPException(400, "Esse saque não pode mais ser aprovado")
+    # Funds are already held in the "processing" bucket since the request was made —
+    # approving means they leave the wallet for good (paid out), never returning to available.
+    await debit_wallet(withdrawal["user_id"], to_cents(withdrawal["amount"]), "WITHDRAWAL", reference_type="withdrawal",
+                        reference_id=withdrawal_id, bucket="processing", description="Saque aprovado", count_as_spent=False)
+    await db.withdrawals.update_one({"id": withdrawal_id}, {"$set": {"status": "COMPLETED", "updated_at": now()}})
+    await notify(withdrawal["user_id"], "Saque concluído", f"Seu saque de R$ {withdrawal['amount']:.2f} foi concluído.", "withdrawal")
+    await log_action(admin["id"], "approve_withdrawal", f"withdrawal:{withdrawal_id}")
+    return {"ok": True, "status": "COMPLETED"}
+
+
+@router.post("/withdrawals/{withdrawal_id}/reject")
+async def admin_reject_withdrawal(withdrawal_id: str, body: AdminWithdrawalActionIn, admin=Depends(get_current_admin)):
+    withdrawal = await db.withdrawals.find_one({"id": withdrawal_id})
+    if not withdrawal:
+        raise HTTPException(404, "Saque não encontrado")
+    if withdrawal["status"] not in ("PENDING", "REVIEW_REQUIRED"):
+        raise HTTPException(400, "Esse saque não pode mais ser recusado")
+    await move_bucket(withdrawal["user_id"], to_cents(withdrawal["amount"]), "processing", "available", "WITHDRAWAL",
+                       reference_type="withdrawal", reference_id=withdrawal_id, description=f"Saque recusado: {body.reason}")
+    await db.withdrawals.update_one({"id": withdrawal_id}, {"$set": {"status": "FAILED", "reason": body.reason, "updated_at": now()}})
+    await notify(withdrawal["user_id"], "Saque recusado", f"Seu saque de R$ {withdrawal['amount']:.2f} foi recusado. {body.reason}", "withdrawal")
+    await log_action(admin["id"], "reject_withdrawal", f"withdrawal:{withdrawal_id}:{body.reason}")
+    return {"ok": True, "status": "FAILED"}
+
+
+@router.get("/payments")
+async def admin_list_payments(admin=Depends(get_current_admin)):
+    return await db.payments.find({}, {"_id": 0}).sort("created_at", -1).to_list(200)
+
+
+@router.get("/disputes")
+async def admin_list_disputes(status: Optional[str] = None, admin=Depends(get_current_admin)):
+    query = {"status": status} if status else {}
+    items = await db.disputes.find(query, {"_id": 0}).sort("created_at", -1).to_list(200)
+    reporter_ids = list({d["reporter_id"] for d in items})
+    users = {u["id"]: u.get("name") async for u in db.users.find({"id": {"$in": reporter_ids}})}
+    return [d | {"reporter_name": users.get(d["reporter_id"], "—")} for d in items]
+
+
+@router.patch("/disputes/{dispute_id}")
+async def admin_resolve_dispute(dispute_id: str, body: AdminDisputeActionIn, admin=Depends(get_current_admin)):
+    if body.status not in ("UNDER_REVIEW", "RESOLVED", "CANCELLED"):
+        raise HTTPException(400, "Status inválido.")
+    dispute = await db.disputes.find_one({"id": dispute_id})
+    if not dispute:
+        raise HTTPException(404, "Disputa não encontrada")
+    await db.disputes.update_one({"id": dispute_id}, {"$set": {"status": body.status, "resolution": body.resolution, "updated_at": now()}})
+    if body.refund and body.status == "RESOLVED":
+        payment = await db.payments.find_one({"order_id": dispute["order_id"], "status": "held"})
+        if payment:
+            refund_cents = to_cents(payment["gross_amount"])
+            await credit_wallet(payment["client_id"], refund_cents, "REFUND", reference_type="dispute", reference_id=dispute_id, description="Reembolso por disputa")
+            await db.payments.update_one({"id": payment["id"]}, {"$set": {"status": "refunded", "updated_at": now()}})
+            await notify(payment["client_id"], "Reembolso realizado", "Sua disputa foi resolvida com reembolso.", "refund")
+    await notify(dispute["reporter_id"], "Disputa atualizada", f"Sua disputa foi marcada como {body.status.lower()}.", "dispute")
+    await log_action(admin["id"], "resolve_dispute", f"dispute:{dispute_id}:{body.status}")
+    return {"ok": True}
+
+
+@router.get("/config")
+async def admin_get_config(admin=Depends(get_current_admin)):
+    return await get_commission_config()
+
+
+@router.patch("/config")
+async def admin_update_config(body: CommissionConfigIn, admin=Depends(get_current_admin)):
+    data = {k: v for k, v in body.model_dump().items() if v is not None}
+    if data:
+        data["id"] = "financial"
+        await db.platform_config.update_one({"id": "financial"}, {"$set": data}, upsert=True)
+        await log_action(admin["id"], "update_config", f"financial:{data}")
+    return await get_commission_config()
 
 
 # ---------- audit ----------

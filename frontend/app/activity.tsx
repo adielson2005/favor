@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { api, Order } from "@/src/api";
 import { OrderCard } from "@/src/components/OrderCard";
 import { Avatar, Chip, EmptyState, Skeleton, Stars } from "@/src/components/ui";
+import { useRequireAuth } from "@/src/hooks/use-require-auth";
 import { useApp } from "@/src/state";
 import { useTheme } from "@/src/theme";
 import { safeBack } from "@/src/utils/navigation";
@@ -23,6 +24,7 @@ const ALL_STATUS = "published,accepted,in_progress,completed,cancelled";
 export default function Activity() {
   const { colors } = useTheme();
   const { me } = useApp();
+  useRequireAuth();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const params = useLocalSearchParams<{ tab?: TabKey }>();

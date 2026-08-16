@@ -6,17 +6,19 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { api } from "@/src/api";
 import { EmptyState, Skeleton } from "@/src/components/ui";
+import { useRequireAuth } from "@/src/hooks/use-require-auth";
 import { useApp } from "@/src/state";
 import { useTheme } from "@/src/theme";
 import { safeBack } from "@/src/utils/navigation";
 
 const ICONS: Record<string, keyof typeof Ionicons.glyphMap> = {
-  proposal: "mail-outline", accept: "checkmark-circle-outline", message: "chatbubble-outline",
+  proposal: "mail-outline", accept: "checkmark-circle-outline", reject: "close-circle-outline", message: "chatbubble-outline",
   status: "flag-outline", review: "star-outline",
 };
 
 export default function Notifications() {
   const { colors } = useTheme();
+  useRequireAuth();
   const { refreshUnread } = useApp();
   const router = useRouter();
   const insets = useSafeAreaInsets();

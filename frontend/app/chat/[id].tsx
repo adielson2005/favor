@@ -8,6 +8,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { api, Message, Order } from "@/src/api";
 import { Avatar } from "@/src/components/ui";
 import { fonts } from "@/src/hooks/use-app-fonts";
+import { useRequireAuth } from "@/src/hooks/use-require-auth";
 import { useApp } from "@/src/state";
 import { useTheme } from "@/src/theme";
 import { safeBack } from "@/src/utils/navigation";
@@ -15,6 +16,7 @@ import { safeBack } from "@/src/utils/navigation";
 export default function Chat() {
   const { colors } = useTheme();
   const { me } = useApp();
+  useRequireAuth();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -77,6 +79,23 @@ export default function Chat() {
     }
   };
 
+  const reportMessage = (messageId: string) => {
+    Alert.alert("Denunciar mensagem", "Qual o motivo?", [
+      { text: "Cancelar", style: "cancel" },
+      ...["Spam", "Conteúdo impróprio", "Golpe ou fraude", "Outro"].map((reason) => ({
+        text: reason,
+        onPress: async () => {
+          try {
+            await api.post("/reports", { target_type: "message", target_id: messageId, reason });
+            Alert.alert("Obrigado", "Recebemos sua denúncia.");
+          } catch (e: any) {
+            Alert.alert("Ops", e.message || "Não conseguimos enviar agora.");
+          }
+        },
+      })),
+    ]);
+  };
+
   const other = order && me ? (order.client_id === me.id ? order.worker : order.client) : null;
 
   return (
@@ -110,7 +129,7 @@ export default function Chat() {
             }
             const mine = !!me && item.sender_id === me.id;
             return (
-              <View style={{ alignSelf: mine ? "flex-end" : "flex-start", maxWidth: "80%" }}>
+              <Pressable testID="chat-message" onLongPress={() => reportMessage(item.id)} style={{ alignSelf: mine ? "flex-end" : "flex-start", maxWidth: "80%" }}>
                 {item.image_b64 ? (
                   <Image source={{ uri: item.image_b64 }} style={{ width: 200, height: 200, borderRadius: 16 }} resizeMode="cover" />
                 ) : (
@@ -118,7 +137,7 @@ export default function Chat() {
                     <Text style={{ color: mine ? colors.onPrimary : colors.ink, fontSize: 14, lineHeight: 20 }}>{item.text}</Text>
                   </View>
                 )}
-              </View>
+              </Pressable>
             );
           }}
           ListEmptyComponent={

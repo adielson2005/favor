@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { FlatList, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, FlatList, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { api, Order } from "@/src/api";
@@ -12,6 +12,7 @@ import { useBreakpoint } from "@/src/hooks/use-breakpoint";
 import { useApp } from "@/src/state";
 import { useTheme } from "@/src/theme";
 const BUDGETS = [{ label: "Até R$ 30", value: 30 }, { label: "Até R$ 50", value: 50 }, { label: "Até R$ 100", value: 100 }, { label: "Até R$ 200", value: 200 }];
+const PAGE_SIZE = 20;
 
 export default function Explore() {
   const { colors } = useTheme();
@@ -24,6 +25,8 @@ export default function Explore() {
 
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState<string | null>(null);
   const [type, setType] = useState<string | null>(null);
@@ -36,20 +39,35 @@ export default function Explore() {
     if (params.category) setCategory(params.category);
   }, [params.category]);
 
+  const buildQuery = (q: string, cat: string | null, tp: string | null, nb: string | null, bd: number | null, offset: number) => {
+    const parts = [`city_id=${city!.id}`, `status=published`, `limit=${PAGE_SIZE}`, `offset=${offset}`];
+    if (q.trim()) parts.push(`q=${encodeURIComponent(q.trim())}`);
+    if (cat) parts.push(`category_id=${cat}`);
+    if (tp) parts.push(`type=${tp}`);
+    if (nb) parts.push(`neighborhood_id=${nb}`);
+    if (bd) parts.push(`max_budget=${bd}`);
+    return parts.join("&");
+  };
+
   const load = useCallback(async (q: string, cat: string | null, tp: string | null, nb: string | null, bd: number | null) => {
     if (!city) return;
     setLoading(true);
     try {
-      const parts = [`city_id=${city.id}`, `status=published`];
-      if (q.trim()) parts.push(`q=${encodeURIComponent(q.trim())}`);
-      if (cat) parts.push(`category_id=${cat}`);
-      if (tp) parts.push(`type=${tp}`);
-      if (nb) parts.push(`neighborhood_id=${nb}`);
-      if (bd) parts.push(`max_budget=${bd}`);
-      const data = await api.get(`/orders?${parts.join("&")}`);
+      const data: Order[] = await api.get(`/orders?${buildQuery(q, cat, tp, nb, bd, 0)}`);
       setOrders(data);
-    } catch { setOrders([]); } finally { setLoading(false); }
-  }, [city]);
+      setHasMore(data.length === PAGE_SIZE);
+    } catch { setOrders([]); setHasMore(false); } finally { setLoading(false); }
+  }, [city]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const loadMore = async () => {
+    if (!city || loading || loadingMore || !hasMore) return;
+    setLoadingMore(true);
+    try {
+      const data: Order[] = await api.get(`/orders?${buildQuery(search, category, type, hood, budget, orders.length)}`);
+      setOrders((prev) => [...prev, ...data]);
+      setHasMore(data.length === PAGE_SIZE);
+    } catch { /* keep what's already loaded */ } finally { setLoadingMore(false); }
+  };
 
   useFocusEffect(useCallback(() => { load(search, category, type, hood, budget); }, [load, category, type, hood, budget])); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -113,6 +131,9 @@ export default function Explore() {
           showsVerticalScrollIndicator={false}
           renderItem={({ item, index }) => <OrderCard order={item} index={index} style={numColumns > 1 ? { flex: 1 } : undefined} onPress={() => router.push(`/order/${item.id}`)} />}
           ListEmptyComponent={<EmptyState icon="leaf-outline" title="Nenhum pedido encontrado." body="Tente outra busca ou remova os filtros." actionTitle={activeFilters ? "Limpar filtros" : undefined} onAction={clearFilters} />}
+          onEndReachedThreshold={0.4}
+          onEndReached={loadMore}
+          ListFooterComponent={loadingMore ? <ActivityIndicator style={{ marginTop: 12 }} color={colors.muted} /> : null}
         />
       )}
 

@@ -47,6 +47,13 @@ function AppStack() {
         <Stack.Screen name="auth/signup" options={{ animation: "slide_from_right" }} />
         <Stack.Screen name="auth/forgot-password" options={{ animation: "slide_from_right" }} />
         <Stack.Screen name="auth/verify-email" options={{ animation: "slide_from_right" }} />
+        <Stack.Screen name="wallet/index" options={{ animation: "slide_from_right" }} />
+        <Stack.Screen name="wallet/deposit" options={{ animation: "slide_from_right" }} />
+        <Stack.Screen name="wallet/withdraw" options={{ animation: "slide_from_right" }} />
+        <Stack.Screen name="wallet/bank-accounts" options={{ animation: "slide_from_right" }} />
+        <Stack.Screen name="wallet/earnings" options={{ animation: "slide_from_right" }} />
+        <Stack.Screen name="wallet/extract" options={{ animation: "slide_from_right" }} />
+        <Stack.Screen name="security" options={{ animation: "slide_from_right" }} />
       </Stack>
     </>
   );

@@ -6,25 +6,30 @@ import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, Text, View }
 import Animated, { FadeIn, ZoomIn } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { api, Order, Proposal } from "@/src/api";
+import { api, newIdempotencyKey, Order, Payment, Proposal } from "@/src/api";
 import { Avatar, Btn, Chip, EmptyState, Field, Sheet, Stars } from "@/src/components/ui";
 import { fonts } from "@/src/hooks/use-app-fonts";
+import { useRequireAuth } from "@/src/hooks/use-require-auth";
 import { useApp } from "@/src/state";
-import { useTheme } from "@/src/theme";
+import { radius, space, type, useTheme } from "@/src/theme";
 import { safeBack } from "@/src/utils/navigation";
 
 const FIELD_LABELS: Record<string, string> = { origem: "De onde", destino: "Para onde", local_compra: "Onde comprar", equipamento: "Equipamento", veiculo: "Veículo", pet: "Pet", prazo: "Prazo", ambiente: "Ambiente/item", documento: "Documento", evento: "Evento" };
 const REPORT_REASONS = ["Golpe ou fraude", "Conteúdo inadequado", "Pedido falso", "Comportamento abusivo", "Outro"];
+const DISPUTE_REASONS = ["Serviço não foi realizado", "Cobrança indevida", "Comportamento do outro lado", "Qualidade do serviço", "Outro"];
+const PAYMENT_STATUS_LABELS: Record<string, string> = { pending: "Processando pagamento", held: "Pagamento protegido", released: "Pagamento liberado", refunded: "Pagamento reembolsado" };
 
 export default function OrderDetail() {
   const { colors } = useTheme();
   const { me } = useApp();
+  useRequireAuth();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { id, published } = useLocalSearchParams<{ id: string; published?: string }>();
 
   const [order, setOrder] = useState<Order | null>(null);
   const [proposals, setProposals] = useState<Proposal[]>([]);
+  const [payment, setPayment] = useState<Payment | null>(null);
   const [favorited, setFavorited] = useState(false);
   const [showBanner, setShowBanner] = useState(published === "1");
 
@@ -38,6 +43,13 @@ export default function OrderDetail() {
   const [reportReason, setReportReason] = useState(REPORT_REASONS[0]);
   const [reportDetails, setReportDetails] = useState("");
 
+  const [checkoutOpen, setCheckoutOpen] = useState(false);
+  const [paying, setPaying] = useState(false);
+
+  const [disputeOpen, setDisputeOpen] = useState(false);
+  const [disputeReason, setDisputeReason] = useState(DISPUTE_REASONS[0]);
+  const [disputeDetails, setDisputeDetails] = useState("");
+
   const [stars, setStars] = useState(0);
   const [reviewComment, setReviewComment] = useState("");
 
@@ -49,6 +61,9 @@ export default function OrderDetail() {
       setProposals(props);
       const favs = await api.get(`/favorites`);
       setFavorited((favs.order_ids || []).includes(id));
+      if (["accepted", "in_progress", "completed", "cancelled"].includes(data.status)) {
+        api.get(`/orders/${id}/payment`).then(setPayment).catch(() => setPayment(null));
+      }
     } catch { /* order may be gone */ }
   }, [id, me]);
 
@@ -119,6 +134,28 @@ export default function OrderDetail() {
     } catch { Alert.alert("Ops", "Não conseguimos enviar agora."); } finally { setSending(false); }
   };
 
+  const payOrder = async () => {
+    setPaying(true);
+    try {
+      const result = await api.post(`/orders/${order.id}/pay`, { method: "wallet" }, { "Idempotency-Key": newIdempotencyKey() });
+      setPayment(result);
+      setCheckoutOpen(false);
+      haptic();
+      load();
+    } catch (e: any) {
+      Alert.alert("Não foi possível pagar", e.message || "Confira seu saldo e tente novamente.");
+    } finally { setPaying(false); }
+  };
+
+  const sendDispute = async () => {
+    setSending(true);
+    try {
+      await api.post("/disputes", { target_type: "service", order_id: order.id, reason: disputeReason, description: disputeDetails });
+      setDisputeOpen(false); setDisputeDetails("");
+      Alert.alert("Registrado", "Recebemos seu relato e vamos analisar em breve.");
+    } catch (e: any) { Alert.alert("Ops", e.message || "Não conseguimos enviar agora."); } finally { setSending(false); }
+  };
+
   const otherUser = isOwner ? order.worker : order.client;
   const statusIndex = { accepted: 0, in_progress: 1, completed: 2 }[order.status] ?? -1;
 
@@ -175,6 +212,24 @@ export default function OrderDetail() {
           <Text style={{ color: order.status === "completed" ? colors.green : colors.primary, fontSize: 13, fontWeight: "700" }}>{order.status_label}</Text>
         </Animated.View>
 
+        {/* Payment status */}
+        {payment && (
+          <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm, backgroundColor: payment.status === "held" ? colors.greenSoft : colors.alt, borderRadius: radius.md, padding: space.md, marginTop: space.md }}>
+            <Ionicons name={payment.status === "held" ? "shield-checkmark" : payment.status === "released" ? "checkmark-circle" : "time-outline"} size={18} color={payment.status === "held" ? colors.green : colors.muted} />
+            <View style={{ flex: 1 }}>
+              <Text style={{ color: colors.ink, fontFamily: fonts.bodySemiBold, fontSize: 13 }}>{PAYMENT_STATUS_LABELS[payment.status] || payment.status}</Text>
+              {payment.status === "held" && <Text style={{ color: colors.muted, fontSize: 11 }}>O valor fica protegido até a conclusão do serviço.</Text>}
+            </View>
+          </View>
+        )}
+        {isOwner && order.status === "accepted" && (!payment || payment.status === "pending") && (
+          <Pressable testID="pay-order-button" onPress={() => setCheckoutOpen(true)} style={{ flexDirection: "row", alignItems: "center", gap: space.sm, backgroundColor: colors.primarySoft, borderRadius: radius.md, padding: space.md, marginTop: space.md }}>
+            <Ionicons name="card-outline" size={18} color={colors.primary} />
+            <Text style={{ flex: 1, color: colors.primary, fontFamily: fonts.bodyBold, fontSize: 13 }}>Pagar agora para liberar o início do serviço</Text>
+            <Ionicons name="chevron-forward" size={16} color={colors.primary} />
+          </Pressable>
+        )}
+
         {/* Status timeline */}
         {statusIndex >= 0 && (
           <View style={{ flexDirection: "row", alignItems: "center", marginTop: 22, paddingHorizontal: 4 }}>
@@ -190,6 +245,12 @@ export default function OrderDetail() {
               </React.Fragment>
             ))}
           </View>
+        )}
+
+        {(isOwner || isWorker) && ["accepted", "in_progress", "completed"].includes(order.status) && (
+          <Pressable testID="dispute-button" onPress={() => setDisputeOpen(true)} style={{ alignSelf: "flex-start", marginTop: space.md }} hitSlop={8}>
+            <Text style={{ color: colors.faint, fontFamily: fonts.bodySemiBold, fontSize: 12 }}>Tenho um problema com este pedido</Text>
+          </Pressable>
         )}
 
         {/* People */}
@@ -229,7 +290,8 @@ export default function OrderDetail() {
                 ))}
               </View>
             )}
-            <View style={{ marginTop: 16 }}>
+            <View style={{ marginTop: 16, gap: 10 }}>
+              <Btn testID="edit-order-button" title="Editar pedido" variant="secondary" icon="create-outline" onPress={() => router.push({ pathname: "/create", params: { orderId: order.id } })} />
               <Btn title="Cancelar pedido" variant="ghost" onPress={() => Alert.alert("Cancelar pedido", "Tem certeza?", [{ text: "Não" }, { text: "Sim, cancelar", style: "destructive", onPress: () => changeStatus("cancel") }])} />
             </View>
           </View>
@@ -297,6 +359,44 @@ export default function OrderDetail() {
           <Btn title="Enviar denúncia" variant="danger" onPress={sendReport} loading={sending} />
         </View>
       </Sheet>
+
+      {/* Checkout sheet */}
+      <Sheet visible={checkoutOpen} onClose={() => setCheckoutOpen(false)} title="Confirmar pagamento">
+        <View style={{ gap: space.md, paddingVertical: space.md, paddingBottom: space.xxl }}>
+          <View style={{ backgroundColor: colors.alt, borderRadius: radius.md, padding: space.lg, gap: space.sm }}>
+            <CheckoutRow label="Serviço" value={order.title} />
+            <CheckoutRow label="Prestador" value={order.worker?.name || "—"} />
+            <View style={{ height: 1, backgroundColor: colors.border, marginVertical: space.xs }} />
+            <CheckoutRow label="Valor combinado" value={`R$ ${(order.accepted_amount || 0).toFixed(2).replace(".", ",")}`} />
+            <CheckoutRow label="Método" value="Saldo da carteira" />
+            <View style={{ height: 1, backgroundColor: colors.border, marginVertical: space.xs }} />
+            <CheckoutRow label="Total" value={`R$ ${(order.accepted_amount || 0).toFixed(2).replace(".", ",")}`} strong />
+          </View>
+          <Text style={{ color: colors.faint, fontSize: 12 }}>O valor fica protegido até você confirmar a conclusão do serviço.</Text>
+          <Btn testID="confirm-payment-button" title={paying ? "Processando..." : `Pagar R$ ${(order.accepted_amount || 0).toFixed(2).replace(".", ",")}`} onPress={payOrder} loading={paying} />
+        </View>
+      </Sheet>
+
+      {/* Dispute sheet */}
+      <Sheet visible={disputeOpen} onClose={() => setDisputeOpen(false)} title="Tenho um problema">
+        <View style={{ gap: 14, paddingVertical: 12, paddingBottom: 24 }}>
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+            {DISPUTE_REASONS.map((reason) => <Chip key={reason} testID={`dispute-reason-${reason}`} label={reason} active={disputeReason === reason} onPress={() => setDisputeReason(reason)} />)}
+          </View>
+          <Field value={disputeDetails} onChangeText={setDisputeDetails} multiline placeholder="Conte o que aconteceu..." style={{ minHeight: 90, textAlignVertical: "top" }} testID="dispute-details-input" />
+          <Btn testID="send-dispute-button" title="Enviar" onPress={sendDispute} loading={sending} />
+        </View>
+      </Sheet>
+    </View>
+  );
+}
+
+function CheckoutRow({ label, value, strong }: { label: string; value: string; strong?: boolean }) {
+  const { colors } = useTheme();
+  return (
+    <View style={{ flexDirection: "row", justifyContent: "space-between", gap: space.md }}>
+      <Text style={{ color: colors.muted, fontSize: strong ? 15 : 13 }} numberOfLines={1}>{label}</Text>
+      <Text style={{ color: colors.ink, fontFamily: strong ? fonts.headingBold : fonts.bodySemiBold, fontSize: strong ? 17 : 13, flexShrink: 1, textAlign: "right" }} numberOfLines={1}>{value}</Text>
     </View>
   );
 }

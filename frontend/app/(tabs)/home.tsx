@@ -7,6 +7,8 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { api, Order } from "@/src/api";
 import { OrderCard } from "@/src/components/OrderCard";
 import { Avatar, Btn, EmptyState, Segmented, Skeleton } from "@/src/components/ui";
+import { fonts } from "@/src/hooks/use-app-fonts";
+import { useBreakpoint } from "@/src/hooks/use-breakpoint";
 import { useApp } from "@/src/state";
 import { useTheme } from "@/src/theme";
 
@@ -15,20 +17,22 @@ export default function Home() {
   const { me, mode, setMode, categories, city, unread, refreshUnread, loading: bootLoading, error, retry } = useApp();
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { isDesktop } = useBreakpoint();
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
   const load = useCallback(async () => {
+    if (!city || !me) return;
     try {
-      const query = mode === "client" ? `client_id=${me.id}&status=published,accepted,in_progress` : `city_id=city-parauapebas&status=published`;
+      const query = mode === "client" ? `client_id=${me.id}&status=published,accepted,in_progress` : `city_id=${city.id}&status=published`;
       const data = await api.get(`/orders?${query}&limit=20`);
       setOrders(mode === "worker" ? data.filter((o: Order) => o.client_id !== me.id) : data);
     } catch { /* handled by empty state */ } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [mode, me.id]);
+  }, [mode, me, city]);
 
   useFocusEffect(useCallback(() => { load(); refreshUnread(); }, [load, refreshUnread]));
 
@@ -40,20 +44,24 @@ export default function Home() {
     );
   }
 
+  if (!me) {
+    return <View style={{ flex: 1, backgroundColor: colors.bg }} />;
+  }
+
   const isClient = mode === "client";
   const nearby = orders.slice(0, 3);
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg }}>
       <ScrollView
-        contentContainerStyle={{ paddingTop: insets.top + 16, paddingBottom: 32 }}
+        contentContainerStyle={{ paddingTop: insets.top + 16, paddingBottom: 32, width: "100%", maxWidth: isDesktop ? 720 : undefined, alignSelf: "center" }}
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} tintColor={colors.muted} />}
       >
         {/* Header */}
         <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 20, gap: 12 }}>
           <View style={{ flex: 1 }}>
-            <Text style={{ color: colors.ink, fontSize: 22, fontWeight: "800", letterSpacing: -0.5 }}>Olá, {me.name.split(" ")[0]}</Text>
+            <Text style={{ color: colors.ink, fontFamily: fonts.headingExtraBold, fontSize: 22, letterSpacing: -0.5 }}>Olá, {me.name.split(" ")[0]}</Text>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 4, marginTop: 2 }}>
               <Ionicons name="location-outline" size={13} color={colors.muted} />
               <Text style={{ color: colors.muted, fontSize: 13 }}>{city?.name || "Parauapebas"}, PA</Text>
@@ -68,6 +76,19 @@ export default function Home() {
           </Pressable>
         </View>
 
+        {/* Email verification nudge — non-blocking, dismiss by verifying or ignoring */}
+        {!me.verified_email && (
+          <Pressable
+            testID="verify-email-banner"
+            onPress={() => router.push("/auth/verify-email")}
+            style={{ flexDirection: "row", alignItems: "center", gap: 10, marginHorizontal: 20, marginTop: 14, padding: 12, borderRadius: 14, backgroundColor: colors.accentSoft }}
+          >
+            <Ionicons name="mail-unread-outline" size={18} color={colors.accent} />
+            <Text style={{ flex: 1, color: colors.ink, fontFamily: fonts.bodySemiBold, fontSize: 13 }}>Confirme seu e-mail para proteger sua conta.</Text>
+            <Ionicons name="chevron-forward" size={16} color={colors.faint} />
+          </Pressable>
+        )}
+
         {/* Mode switch */}
         <View style={{ paddingHorizontal: 20, marginTop: 18 }}>
           <Segmented
@@ -79,7 +100,7 @@ export default function Home() {
 
         {/* Hero */}
         <View style={{ paddingHorizontal: 20, marginTop: 26 }}>
-          <Text style={{ color: colors.ink, fontSize: 26, fontWeight: "800", letterSpacing: -0.7, lineHeight: 32 }}>
+          <Text style={{ color: colors.ink, fontFamily: fonts.headingExtraBold, fontSize: 26, letterSpacing: -0.7, lineHeight: 32 }}>
             {isClient ? "Precisa de uma mão?" : "Encontre algo para fazer."}
           </Text>
           {isClient ? (
@@ -104,7 +125,7 @@ export default function Home() {
         {/* Categories */}
         <View style={{ marginTop: 30 }}>
           <View style={{ paddingHorizontal: 20 }}>
-            <Text style={{ color: colors.ink, fontSize: 17, fontWeight: "800", marginBottom: 12 }}>Categorias</Text>
+            <Text style={{ color: colors.ink, fontFamily: fonts.headingExtraBold, fontSize: 17, marginBottom: 12 }}>Categorias</Text>
           </View>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 20, gap: 10 }}>
             {bootLoading
@@ -126,7 +147,7 @@ export default function Home() {
         {/* Orders */}
         <View style={{ paddingHorizontal: 20, marginTop: 30 }}>
           <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-            <Text style={{ color: colors.ink, fontSize: 17, fontWeight: "800" }}>{isClient ? "Seus pedidos" : "Pedidos perto de você"}</Text>
+            <Text style={{ color: colors.ink, fontFamily: fonts.headingExtraBold, fontSize: 17 }}>{isClient ? "Seus pedidos" : "Pedidos perto de você"}</Text>
             <Pressable testID="see-all-button" onPress={() => router.push(isClient ? "/activity" : "/(tabs)/explore")} hitSlop={8}>
               <Text style={{ color: colors.primary, fontSize: 13, fontWeight: "700" }}>Ver todos</Text>
             </Pressable>
@@ -139,7 +160,7 @@ export default function Home() {
               : <EmptyState icon="leaf-outline" title="Nenhum pedido por perto agora." body="Volte mais tarde ou explore outras categorias." />
           ) : (
             <View style={{ gap: 10 }}>
-              {nearby.map((order) => <OrderCard key={order.id} order={order} showStatus={isClient} onPress={() => router.push(`/order/${order.id}`)} />)}
+              {nearby.map((order, i) => <OrderCard key={order.id} order={order} index={i} showStatus={isClient} onPress={() => router.push(`/order/${order.id}`)} />)}
             </View>
           )}
         </View>

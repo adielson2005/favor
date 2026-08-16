@@ -7,6 +7,8 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { api, Order } from "@/src/api";
 import { OrderCard } from "@/src/components/OrderCard";
 import { Btn, Chip, EmptyState, Sheet, Skeleton } from "@/src/components/ui";
+import { fonts } from "@/src/hooks/use-app-fonts";
+import { useBreakpoint } from "@/src/hooks/use-breakpoint";
 import { useApp } from "@/src/state";
 import { useTheme } from "@/src/theme";
 const BUDGETS = [{ label: "Até R$ 30", value: 30 }, { label: "Até R$ 50", value: 50 }, { label: "Até R$ 100", value: 100 }, { label: "Até R$ 200", value: 200 }];
@@ -17,6 +19,8 @@ export default function Explore() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const params = useLocalSearchParams<{ category?: string }>();
+  const { isDesktop, isTablet } = useBreakpoint();
+  const numColumns = isDesktop ? 3 : isTablet ? 2 : 1;
 
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
@@ -33,9 +37,10 @@ export default function Explore() {
   }, [params.category]);
 
   const load = useCallback(async (q: string, cat: string | null, tp: string | null, nb: string | null, bd: number | null) => {
+    if (!city) return;
     setLoading(true);
     try {
-      const parts = [`city_id=city-parauapebas`, `status=published`];
+      const parts = [`city_id=${city.id}`, `status=published`];
       if (q.trim()) parts.push(`q=${encodeURIComponent(q.trim())}`);
       if (cat) parts.push(`category_id=${cat}`);
       if (tp) parts.push(`type=${tp}`);
@@ -44,7 +49,7 @@ export default function Explore() {
       const data = await api.get(`/orders?${parts.join("&")}`);
       setOrders(data);
     } catch { setOrders([]); } finally { setLoading(false); }
-  }, []);
+  }, [city]);
 
   useFocusEffect(useCallback(() => { load(search, category, type, hood, budget); }, [load, category, type, hood, budget])); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -60,12 +65,12 @@ export default function Explore() {
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg, paddingTop: insets.top + 12 }}>
       {/* Header */}
-      <View style={{ paddingHorizontal: 20, gap: 12 }}>
+      <View style={{ paddingHorizontal: 20, gap: 12, width: "100%", maxWidth: isDesktop ? 1120 : undefined, alignSelf: "center" }}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
           <Ionicons name="location" size={15} color={colors.primary} />
-          <Text style={{ color: colors.ink, fontSize: 15, fontWeight: "700" }}>{city?.name || "Parauapebas"}, PA</Text>
+          <Text style={{ color: colors.ink, fontFamily: fonts.bodyBold, fontSize: 15 }}>{city?.name || "Parauapebas"}, PA</Text>
         </View>
-        <Text style={{ color: colors.ink, fontSize: 24, fontWeight: "800", letterSpacing: -0.5 }}>Pedidos perto de você</Text>
+        <Text style={{ color: colors.ink, fontFamily: fonts.headingExtraBold, fontSize: 24, letterSpacing: -0.5 }}>Pedidos perto de você</Text>
         <View style={{ flexDirection: "row", gap: 10 }}>
           <View style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderRadius: 14, paddingHorizontal: 14, height: 48 }}>
             <Ionicons name="search-outline" size={17} color={colors.faint} />
@@ -99,11 +104,14 @@ export default function Explore() {
         <View style={{ padding: 20, gap: 10 }}><Skeleton /><Skeleton /><Skeleton /></View>
       ) : (
         <FlatList
+          key={numColumns}
           data={orders}
           keyExtractor={(item) => item.id}
-          contentContainerStyle={{ padding: 20, paddingBottom: 40, gap: 10 }}
+          numColumns={numColumns}
+          columnWrapperStyle={numColumns > 1 ? { gap: 12 } : undefined}
+          contentContainerStyle={{ padding: 20, paddingBottom: 40, gap: 12, maxWidth: isDesktop ? 1080 : undefined, width: "100%", alignSelf: "center" }}
           showsVerticalScrollIndicator={false}
-          renderItem={({ item }) => <OrderCard order={item} onPress={() => router.push(`/order/${item.id}`)} />}
+          renderItem={({ item, index }) => <OrderCard order={item} index={index} style={numColumns > 1 ? { flex: 1 } : undefined} onPress={() => router.push(`/order/${item.id}`)} />}
           ListEmptyComponent={<EmptyState icon="leaf-outline" title="Nenhum pedido encontrado." body="Tente outra busca ou remova os filtros." actionTitle={activeFilters ? "Limpar filtros" : undefined} onAction={clearFilters} />}
         />
       )}

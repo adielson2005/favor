@@ -1,0 +1,220 @@
+{
+  "project": {
+    "name": "FAZÊ",
+    "slogan": "Precisou? Alguém faz.",
+    "context": "Hybrid fullstack mobile marketplace",
+    "audience": "Moradores de Parauapebas-PA que precisam resolver tarefas e pessoas locais que querem ganhar dinheiro realizando serviços.",
+    "mvp_priority": ["Home", "Criar pedido", "Explorar", "Proposta", "Chat", "Conclusão", "Avaliação"],
+    "theme": "Light-first with a complete dark mode toggle",
+    "emotional_tone": "local, confiável, jovem, útil, humano e profissional sem aparência corporativa"
+  },
+  "design_concepts": [
+    {
+      "name": "Praça de Serviços",
+      "probability": 0.38,
+      "references": ["Brazilian street-signage", "editorial magazine grids", "tactile app UI"],
+      "direction": "Off-white surfaces, indigo ink, lime-green action markers, asymmetrical sections and local neighborhood language.",
+      "best_for": "Recommended MVP direction; makes local commerce feel human and memorable."
+    },
+    {
+      "name": "Sinal Verde",
+      "probability": 0.22,
+      "references": ["Swiss functional typography", "transit wayfinding", "soft utility apps"],
+      "direction": "Strict hierarchy, bright green status signals and indigo navigation anchors.",
+      "best_for": "High scanability in proposals, status and chat."
+    },
+    {
+      "name": "Caderno de Bairro",
+      "probability": 0.18,
+      "references": ["Brazilian notebook stationery", "handwritten annotations", "modern marketplace cards"],
+      "direction": "Warm paper texture, ink-like dividers and small handwritten accent labels used sparingly.",
+      "best_for": "Community and trust storytelling."
+    },
+    {
+      "name": "Radar Local",
+      "probability": 0.12,
+      "references": ["dashboard density", "radar diagrams", "indigo night mode"],
+      "direction": "Compact discovery screens with signal dots, distance labels and dark-mode depth.",
+      "best_for": "Fazedor exploration and order tracking."
+    },
+    {
+      "name": "Ritmo FAZÊ",
+      "probability": 0.10,
+      "references": ["kinetic editorial posters", "Brazilian urban color blocking", "micro-interaction design"],
+      "direction": "Large typographic moments, offset chips and energetic transitions without gradients.",
+      "best_for": "Onboarding and empty states, not dense task flows."
+    }
+  ],
+  "research": {
+    "sources": [
+      {
+        "name": "Baymard mobile UX patterns",
+        "url": "https://baymard.com/blog/mobile-app-ux-trends",
+        "descriptors": ["thumb-friendly navigation", "advanced filters", "persistent trust signals", "progressive loading"]
+      },
+      {
+        "name": "Mobbin mobile flows",
+        "url": "https://mobbin.com/explore/mobile/flows",
+        "descriptors": ["step-by-step chat flows", "action-based journey research", "screen sequence analysis"]
+      },
+      {
+        "name": "Godly design gallery",
+        "url": "https://godly.design/",
+        "descriptors": ["editorial spacing", "distinctive typography", "motion-led section transitions"]
+      },
+      {
+        "name": "Purrweb marketplace UX guide",
+        "url": "https://www.purrweb.com/blog/marketplace-ux-ui-design/",
+        "descriptors": ["ratings and verification", "search and filtering", "real-time buyer-seller messaging"]
+      }
+    ],
+    "application": "Borrow the research patterns for usability, but express them through local Brazilian visual language rather than generic marketplace UI."
+  },
+  "typography": {
+    "heading_font": "Manrope",
+    "body_font": "IBM Plex Sans",
+    "accent_font": "IBM Plex Mono",
+    "rationale": "Manrope gives a friendly, contemporary headline voice; IBM Plex Sans keeps forms and chat highly legible; mono is reserved for status IDs, timestamps and labels.",
+    "rules": {
+      "h1": "text-4xl sm:text-5xl, tracking-tight, font-[800], leading-none",
+      "h2": "text-2xl sm:text-3xl, tracking-tight, font-[750]",
+      "h3": "text-xl sm:text-2xl, font-[700]",
+      "body": "text-base leading-relaxed; use text-sm only for metadata",
+      "labels": "text-xs uppercase tracking-[0.18em] font-[700]",
+      "avoid": ["Inter for headings", "Space Grotesk", "all-bold typography", "text-7xl or larger"]
+    },
+    "implementation": "Use CSS @import or local font loading in .js project's global stylesheet; create font-family tokens in Tailwind config when available."
+  },
+  "colors": {
+    "archetype": "Organic & earthy with indigo civic contrast",
+    "light": {
+      "background": "#F7F5F0",
+      "surface": "#FFFDF8",
+      "surface_alt": "#EEECE5",
+      "ink": "#1D1A24",
+      "muted_ink": "#68646D",
+      "primary_indigo": "#4436A8",
+      "primary_indigo_dark": "#302477",
+      "action_green": "#238A59",
+      "action_green_dark": "#17613F",
+      "warm_yellow": "#F2C94C",
+      "danger": "#B53A43",
+      "border": "#D9D5CD"
+    },
+    "dark": {
+      "background": "#17151D",
+      "surface": "#211E29",
+      "surface_alt": "#2B2735",
+      "ink": "#F7F4EC",
+      "muted_ink": "#B9B3C0",
+      "primary_indigo": "#9185F1",
+      "primary_indigo_dark": "#6F62D5",
+      "action_green": "#67D79A",
+      "action_green_dark": "#3BAF72",
+      "warm_yellow": "#F3D36A",
+      "danger": "#F07A83",
+      "border": "#403A4A"
+    },
+    "rules": ["Never use pure black or neutral gray", "No full-screen gradients", "Use indigo only for primary actions and navigation emphasis", "Use green for positive status, completed states and confirmation", "Ensure normal text contrast is at least 4.5:1"]
+  },
+  "visual_enhancers": {
+    "texture": "Add a barely visible warm paper/noise texture at 3-5% opacity on the app shell; aria-hidden and never behind small text.",
+    "logo": "FAZÊ wordmark in Manrope 800 with a distinctive acute accent; pair with a compact four-stroke task mark, not an emoji.",
+    "shadows": "Prefer 1px tinted borders and restrained ambient shadows; cards should feel flat and tactile, not floating everywhere.",
+    "radii": "rounded-2xl for primary surfaces, rounded-xl for list rows, rounded-full for chips and buttons.",
+    "scrollbar": "Customize to a 6px thumb tinted indigo, with no gutter.",
+    "break_pattern": "Use offset section headers and one intentionally empty grid cell on Home to create breathing room; this breaks generic centered app layouts for local personality."
+  },
+  "navigation": {
+    "component_name": "BottomNav",
+    "items": ["Início", "Explorar", "+", "Mensagens", "Perfil"],
+    "desktop_behavior": "Keep visible on desktop preview as a bottom navigation rail or centered bottom bar; do not hide links behind hamburger.",
+    "mobile_behavior": "Fixed bottom bar with solid surface, backdrop-blur-xl, border-top, z-50 and safe-area padding.",
+    "primary_cta": "The + action is larger, indigo filled, and visually interrupts the bar as the creation trigger.",
+    "testids": ["bottom-nav-home-link", "bottom-nav-explore-link", "bottom-nav-create-button", "bottom-nav-messages-link", "bottom-nav-profile-link"]
+  },
+  "layouts": {
+    "app_shell": "Mobile-first max-width 480px on phone preview, full-width responsive on larger screens; content padding px-5 sm:px-8 and bottom padding for nav.",
+    "home": "Asymmetric vertical editorial flow: greeting and mode switch, need input, horizontal category chips, nearby orders list, trust strip. Do not center the whole page.",
+    "explore": "Dense but breathable list with search, filter chips and bottom-sheet filters. Use one dominant result column and small status metadata.",
+    "create_order": "Four-step progressive flow: necessidade, detalhes, prazo/local, revisar. Show progress indicator and autosave draft affordance.",
+    "order_detail": "Top title and trust summary, task description, proposal count, sticky bottom action. Use flat sections, not nested cards.",
+    "proposal": "Proposal rows include avatar, name, rating, completed tasks, price, message and accept action; visually prioritize trust before price.",
+    "chat": "Conversation-first layout, distinct client/fazedor bubbles, contextual order status header, composer fixed above bottom safe area.",
+    "completion": "A calm confirmation scene with status timeline, completion action and evaluation prompt. Avoid confetti overload.",
+    "profile": "Trust-led profile: avatar, name, neighborhood, rating, completed jobs, verification, portfolio and settings."
+  },
+  "grids": {
+    "home_tetris": "Use grid-cols-1 md:grid-cols-8 with gap-6 md:gap-8; hero need field spans full, nearby orders span 5, trust panel spans 3, leave an intentional breathing cell.",
+    "explore_density": "Use grid-cols-1 md:grid-cols-2 gap-4; list items stretch to equal height; on phone remain a single scan-friendly column.",
+    "direct_children_rule": "Grid items must be direct children; if using motion.div, give the motion wrapper the grid span classes directly.",
+    "container_padding": "Every bordered container uses p-6 or p-8; never place text against a border."
+  },
+  "components": [
+    {"name": "ModeSwitch", "purpose": "Toggle Cliente/Fazedor without leaving Home", "component_path": "frontend/src/components/ModeSwitch.js", "testids": ["mode-switch-client-button", "mode-switch-worker-button"]},
+    {"name": "NeedComposer", "purpose": "Primary need input and create-order CTA", "component_path": "frontend/src/components/NeedComposer.js", "testids": ["need-composer-input", "need-composer-submit-button"]},
+    {"name": "CategoryChip", "purpose": "Fast task discovery", "component_path": "frontend/src/components/CategoryChip.js", "testids": ["category-chip"]},
+    {"name": "OrderRow", "purpose": "Nearby/explore order summary", "component_path": "frontend/src/components/OrderRow.js", "testids": ["order-row", "order-row-open-button"]},
+    {"name": "TrustBadge", "purpose": "Verification and rating signal", "component_path": "frontend/src/components/TrustBadge.js", "testids": ["trust-badge"]},
+    {"name": "ProposalSheet", "purpose": "Review and accept proposal in context", "component_path": "frontend/src/components/ProposalSheet.js", "testids": ["proposal-sheet", "proposal-accept-button"]},
+    {"name": "StatusTimeline", "purpose": "Track pedido lifecycle", "component_path": "frontend/src/components/StatusTimeline.js", "testids": ["status-timeline", "status-step"]},
+    {"name": "ChatComposer", "purpose": "Send task-related message", "component_path": "frontend/src/components/ChatComposer.js", "testids": ["chat-message-input", "chat-send-button"]},
+    {"name": "RatingPrompt", "purpose": "Complete task and evaluate", "component_path": "frontend/src/components/RatingPrompt.js", "testids": ["rating-score-input", "rating-submit-button"]}
+  ],
+  "motion": {
+    "library": "CSS transitions first; use Framer Motion only for route/section transitions if already installed.",
+    "entrance": "Stagger list rows by 40ms with opacity and translateY(8px); avoid transform on large page containers.",
+    "interactions": "Buttons transition background-color, color, box-shadow and opacity in 160-220ms; press state scale-[0.98].",
+    "proposal_accept": "Use a short green confirmation pulse and replace button label with accepted state; do not rely on motion alone.",
+    "bottom_sheet": "TranslateY with spring-like ease, backdrop scrim at solid rgba color; never complete transparent surface.",
+    "reduced_motion": "Wrap animations in prefers-reduced-motion media query; reduce to opacity or disable decorative movement.",
+    "loading": "Use skeleton blocks matching final geometry, not spinner-only loading."
+  },
+  "accessibility": {
+    "targets": "Interactive targets minimum 44x44px.",
+    "focus": "Use visible 2px indigo or green focus ring with offset; never remove outline without replacement.",
+    "labels": "Every input has a visible label or aria-label; status colors also include text/icon labels.",
+    "contrast": "Meet WCAG AA minimum; test both themes and hover/focus states.",
+    "keyboard": "Bottom sheets trap focus and close on Escape; chat composer remains keyboard accessible.",
+    "semantics": "Use button for actions, links for navigation, headings in order, aria-live for proposal acceptance and sent-message confirmation.",
+    "testids": "All buttons, links, inputs, menus, error messages, balances/statuses and confirmation text require stable kebab-case data-testid attributes."
+  },
+  "media": {
+    "strategy": "No stock photography required for MVP. Use avatars as generated initials or user-provided images; use CSS/icon shapes for categories.",
+    "image_urls": [],
+    "rule": "Do not add placeholder image URLs. If photography is later added, use image_selector_tool and preserve local context."
+  },
+  "3d_libraries": {
+    "decision": "None for MVP",
+    "reason": "FAZÊ prioritizes Android performance, clarity and task completion over immersion.",
+    "future_option": "A lightweight SVG neighborhood signal illustration may be added to an empty state; no map, GPS or WebGL implementation."
+  },
+  "data_and_scope": {
+    "demo_mode": "Provide a visible Cliente/Fazedor demo switch with seeded Parauapebas data.",
+    "sample_locations": ["Cidade Nova", "Rio Verde", "Da Paz", "Bairro União", "Nova Carajás"],
+    "sample_tasks": ["Montar um móvel", "Buscar encomenda", "Ajudar com mudança", "Consertar torneira", "Passear com cachorro"],
+    "excluded": ["payments", "wallet", "real-time GPS", "advanced map", "AI", "ads", "paid plans", "calls"],
+    "backend_note": "MongoDB is selected for the environment; keep UI states ready for loading, empty, error and optimistic proposal/chat updates."
+  },
+  "general_ui_ux_design_guidelines": [
+    "Do not use generic centered layouts, uniform cards or SaaS gradients.",
+    "Use generous spacing: prefer p-6/p-8, py-12/py-16 and clear section rhythm.",
+    "Use solid or opaque glass surfaces in headers and sheets; never complete transparent backgrounds behind content.",
+    "Use Shadcn primitives only for advanced interaction logic when present; customize them to the FAZÊ visual system.",
+    "Do not use native select/date-picker for advanced interactions; use accessible menu/calendar primitives if those flows are introduced.",
+    "Use Sonner for confirmation/error toasts if the existing project provides it.",
+    "Do not use emoji as icons; use lucide-react or existing icon components.",
+    "Every interaction needs hover, active, focus and loading feedback with specific property transitions, never transition: all.",
+    "Preserve content hierarchy: need first, trust second, action third.",
+    "Keep the app feeling like Android mobile UI, not a desktop website squeezed into a phone.",
+    "Keep gradients below 20% of the interface and prefer texture, contrast and layering.",
+    "Use Portuguese-Brazilian copy with concise, warm language and local place names.",
+    "All implementation files are JavaScript (.js); do not provide TypeScript or .tsx guidance."
+  ],
+  "instructions_to_main_agent": {
+    "starter_template": "The expected frontend files were not present at the documented paths during discovery; inspect the actual repository structure before implementation.",
+    "implementation_order": ["global tokens and theme", "app shell and bottom navigation", "Home and mode switch", "create order wizard", "explore and filters", "order/proposal flow", "chat", "completion/rating", "profile and settings"],
+    "quality_bar": "Prioritize usable flows and responsive states over decorative effects. Verify every interactive element has data-testid and both themes remain legible.",
+    "avoid": ["placeholder URLs", "payment UI", "map UI", "real-time location claims", "enterprise dashboard appearance", "hidden desktop navigation", "full-screen gradients", "emoji icons"]
+  }
+}

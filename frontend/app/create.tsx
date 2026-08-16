@@ -1,0 +1,256 @@
+import { Ionicons } from "@expo/vector-icons";
+import * as Haptics from "expo-haptics";
+import { useRouter } from "expo-router";
+import React, { useMemo, useState } from "react";
+import { Alert, KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+
+import { api } from "@/src/api";
+import { Btn, Chip, Field } from "@/src/components/ui";
+import { useApp } from "@/src/state";
+import { useTheme } from "@/src/theme";
+
+const EXTRA_FIELDS: Record<string, { key: string; label: string; placeholder: string }[]> = {
+  "cat-entregas": [
+    { key: "origem", label: "De onde?", placeholder: "Ex: Correios do centro" },
+    { key: "destino", label: "Para onde?", placeholder: "Ex: Rua B, Cidade Nova" },
+  ],
+  "cat-compras": [{ key: "local_compra", label: "Onde comprar?", placeholder: "Ex: Supermercado do bairro" }],
+  "cat-tecnologia": [{ key: "equipamento", label: "Qual equipamento?", placeholder: "Ex: Notebook Dell" }],
+  "cat-veiculos": [{ key: "veiculo", label: "Qual veículo?", placeholder: "Ex: Honda CG 160" }],
+  "cat-pets": [{ key: "pet", label: "Sobre o pet", placeholder: "Ex: Golden retriever, dócil" }],
+  "cat-profissionais": [{ key: "prazo", label: "Prazo", placeholder: "Ex: Até sexta-feira" }],
+};
+
+const DATES = ["Hoje", "Amanhã", "Esta semana", "A combinar"];
+
+export default function Create() {
+  const { colors } = useTheme();
+  const { categories, neighborhoods, city, me, mode, setMode } = useApp();
+  const router = useRouter();
+  const insets = useSafeAreaInsets();
+
+  const [step, setStep] = useState(0);
+  const [title, setTitle] = useState("");
+  const [type, setType] = useState<"favor" | "servico">("favor");
+  const [categoryId, setCategoryId] = useState<string | null>(null);
+  const [subcategoryId, setSubcategoryId] = useState<string | null>(null);
+  const [description, setDescription] = useState("");
+  const [fields, setFields] = useState<Record<string, string>>({});
+  const [hoodId, setHoodId] = useState<string | null>(null);
+  const [hoodSearch, setHoodSearch] = useState("");
+  const [dateLabel, setDateLabel] = useState("Hoje");
+  const [timeLabel, setTimeLabel] = useState("");
+  const [budget, setBudget] = useState("");
+  const [publishing, setPublishing] = useState(false);
+
+  const category = categories.find((c) => c.id === categoryId);
+  const extras = categoryId ? EXTRA_FIELDS[categoryId] || [] : [];
+  const filteredHoods = useMemo(
+    () => neighborhoods.filter((n) => n.name.toLowerCase().includes(hoodSearch.toLowerCase())),
+    [neighborhoods, hoodSearch],
+  );
+
+  const STEPS = ["need", "category", "details", "where", "when", "budget"] as const;
+  const stepKey = STEPS[step];
+  const canContinue = {
+    need: title.trim().length >= 3,
+    category: !!categoryId,
+    details: true,
+    where: !!hoodId,
+    when: !!dateLabel,
+    budget: Number(budget) > 0,
+  }[stepKey];
+
+  const publish = async () => {
+    setPublishing(true);
+    try {
+      const clientId = mode === "client" ? me.id : "demo-client";
+      if (mode !== "client") setMode("client");
+      const order = await api.post("/orders", {
+        title: title.trim(), description: description.trim(), type,
+        category_id: categoryId, subcategory_id: subcategoryId,
+        city_id: city?.id || "city-parauapebas", neighborhood_id: hoodId,
+        date_label: dateLabel, time_label: timeLabel.trim(), budget: Number(budget),
+        fields, client_id: clientId,
+      });
+      if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      router.replace(`/order/${order.id}?published=1`);
+    } catch {
+      Alert.alert("Ops", "Não conseguimos publicar agora. Tente novamente.");
+      setPublishing(false);
+    }
+  };
+
+  const next = () => (step < STEPS.length - 1 ? setStep(step + 1) : publish());
+  const back = () => (step > 0 ? setStep(step - 1) : router.back());
+
+  const label = { color: colors.ink, fontSize: 23, fontWeight: "800" as const, letterSpacing: -0.5, marginBottom: 6 };
+  const hint = { color: colors.muted, fontSize: 14, marginBottom: 18 };
+
+  return (
+    <View style={{ flex: 1, backgroundColor: colors.bg, paddingTop: Platform.OS === "ios" ? 12 : insets.top + 8 }}>
+      {/* Header */}
+      <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 20, height: 48, gap: 14 }}>
+        <Pressable testID="create-close-button" onPress={back} hitSlop={10}>
+          <Ionicons name={step === 0 ? "close" : "arrow-back"} size={24} color={colors.ink} />
+        </Pressable>
+        <Text style={{ color: colors.ink, fontSize: 16, fontWeight: "700", flex: 1 }}>Novo pedido</Text>
+        <Text style={{ color: colors.faint, fontSize: 13, fontWeight: "600" }}>{step + 1}/{STEPS.length}</Text>
+      </View>
+      <View style={{ height: 3, backgroundColor: colors.alt, marginHorizontal: 20, borderRadius: 2, marginBottom: 8 }}>
+        <View style={{ height: 3, borderRadius: 2, backgroundColor: colors.primary, width: `${((step + 1) / STEPS.length) * 100}%` }} />
+      </View>
+
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+        <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 20, paddingBottom: 40 }} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+          {stepKey === "need" && (
+            <View>
+              <Text style={label}>O que você precisa?</Text>
+              <Text style={hint}>Descreva em poucas palavras.</Text>
+              <Field testID="create-title-input" value={title} onChangeText={setTitle} placeholder="Ex: Buscar uma encomenda" autoFocus />
+              <View style={{ marginTop: 24, gap: 10 }}>
+                {[
+                  { key: "favor" as const, title: "Favor", body: "Tarefa simples e pontual", icon: "hand-left-outline" as const },
+                  { key: "servico" as const, title: "Serviço", body: "Exige mais tempo ou habilidade", icon: "construct-outline" as const },
+                ].map((option) => (
+                  <Pressable
+                    key={option.key}
+                    testID={`type-${option.key}`}
+                    onPress={() => setType(option.key)}
+                    style={{ flexDirection: "row", alignItems: "center", gap: 14, padding: 16, borderRadius: 16, backgroundColor: colors.surface, borderWidth: 1.5, borderColor: type === option.key ? colors.primary : colors.border }}
+                  >
+                    <Ionicons name={option.icon} size={20} color={type === option.key ? colors.primary : colors.muted} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ color: colors.ink, fontSize: 15, fontWeight: "700" }}>{option.title}</Text>
+                      <Text style={{ color: colors.muted, fontSize: 13 }}>{option.body}</Text>
+                    </View>
+                    {type === option.key && <Ionicons name="checkmark-circle" size={20} color={colors.primary} />}
+                  </Pressable>
+                ))}
+              </View>
+            </View>
+          )}
+
+          {stepKey === "category" && (
+            <View>
+              <Text style={label}>Qual categoria combina?</Text>
+              <Text style={hint}>Isso ajuda os fazedores certos a encontrarem seu pedido.</Text>
+              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
+                {categories.map((cat) => (
+                  <Pressable
+                    key={cat.id}
+                    testID={`create-cat-${cat.id}`}
+                    onPress={() => { setCategoryId(cat.id); setSubcategoryId(null); }}
+                    style={{ width: "48%", flexGrow: 1, padding: 14, borderRadius: 16, backgroundColor: colors.surface, borderWidth: 1.5, borderColor: categoryId === cat.id ? colors.primary : colors.border, gap: 8 }}
+                  >
+                    <Ionicons name={cat.icon as keyof typeof Ionicons.glyphMap} size={20} color={categoryId === cat.id ? colors.primary : colors.muted} />
+                    <Text style={{ color: colors.ink, fontSize: 13, fontWeight: "700" }}>{cat.name}</Text>
+                  </Pressable>
+                ))}
+              </View>
+              {category && category.subcategories.length > 0 && (
+                <View style={{ marginTop: 24, gap: 10 }}>
+                  <Text style={{ color: colors.muted, fontSize: 12, fontWeight: "700", textTransform: "uppercase", letterSpacing: 0.6 }}>Mais específico (opcional)</Text>
+                  <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                    {category.subcategories.map((sub) => (
+                      <Chip key={sub.id} label={sub.name} active={subcategoryId === sub.id} onPress={() => setSubcategoryId(subcategoryId === sub.id ? null : sub.id)} />
+                    ))}
+                  </View>
+                </View>
+              )}
+            </View>
+          )}
+
+          {stepKey === "details" && (
+            <View style={{ gap: 16 }}>
+              <View>
+                <Text style={label}>Conte um pouco mais.</Text>
+                <Text style={hint}>Detalhes ajudam a receber propostas melhores.</Text>
+              </View>
+              <Field testID="create-description-input" value={description} onChangeText={setDescription} multiline placeholder="Descreva a tarefa..." style={{ minHeight: 110, textAlignVertical: "top" }} />
+              {extras.map((extra) => (
+                <Field
+                  key={extra.key}
+                  label={extra.label}
+                  value={fields[extra.key] || ""}
+                  onChangeText={(v) => setFields({ ...fields, [extra.key]: v })}
+                  placeholder={extra.placeholder}
+                />
+              ))}
+            </View>
+          )}
+
+          {stepKey === "where" && (
+            <View>
+              <Text style={label}>Onde será?</Text>
+              <Text style={hint}>{city?.name || "Parauapebas"}, PA · escolha o bairro</Text>
+              <Field testID="create-hood-search" value={hoodSearch} onChangeText={setHoodSearch} placeholder="Buscar bairro..." />
+              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 16 }}>
+                {filteredHoods.map((n) => (
+                  <Chip key={n.id} testID={`hood-${n.id}`} label={n.name} active={hoodId === n.id} onPress={() => setHoodId(n.id)} />
+                ))}
+              </View>
+            </View>
+          )}
+
+          {stepKey === "when" && (
+            <View>
+              <Text style={label}>Quando?</Text>
+              <Text style={hint}>Escolha o melhor momento.</Text>
+              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 20 }}>
+                {DATES.map((d) => <Chip key={d} testID={`date-${d}`} label={d} active={dateLabel === d} onPress={() => setDateLabel(d)} />)}
+              </View>
+              <Field label="Horário (opcional)" value={timeLabel} onChangeText={setTimeLabel} placeholder="Ex: até 17:00" />
+            </View>
+          )}
+
+          {stepKey === "budget" && (
+            <View>
+              <Text style={label}>Quanto pretende pagar?</Text>
+              <Text style={hint}>Você ainda pode negociar nas propostas.</Text>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginVertical: 10 }}>
+                <Text style={{ color: colors.muted, fontSize: 26, fontWeight: "700" }}>R$</Text>
+                <TextInput
+                  testID="create-budget-input"
+                  value={budget}
+                  onChangeText={(v) => setBudget(v.replace(/[^0-9]/g, ""))}
+                  keyboardType="numeric"
+                  placeholder="0"
+                  placeholderTextColor={colors.faint}
+                  style={{ fontSize: 44, fontWeight: "800", color: colors.ink, minWidth: 120 }}
+                />
+              </View>
+              <View style={{ backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderRadius: 16, padding: 16, marginTop: 16, gap: 6 }}>
+                <Text style={{ color: colors.ink, fontSize: 15, fontWeight: "700" }}>{title || "Seu pedido"}</Text>
+                <Text style={{ color: colors.muted, fontSize: 13 }}>
+                  {category?.name}{subcategoryId ? ` · ${category?.subcategories.find((s) => s.id === subcategoryId)?.name}` : ""} · {type === "favor" ? "Favor" : "Serviço"}
+                </Text>
+                <Text style={{ color: colors.muted, fontSize: 13 }}>
+                  {neighborhoods.find((n) => n.id === hoodId)?.name} · {dateLabel}{timeLabel ? ` · ${timeLabel}` : ""}
+                </Text>
+              </View>
+            </View>
+          )}
+        </ScrollView>
+
+        {/* Fixed footer — outside the ScrollView */}
+        <View style={{ flexDirection: "row", gap: 12, paddingHorizontal: 20, paddingTop: 12, paddingBottom: Math.max(insets.bottom, 16), borderTopWidth: 1, borderTopColor: colors.border, backgroundColor: colors.bg }}>
+          <View style={{ flex: 1 }}>
+            <Btn title={step === 0 ? "Cancelar" : "Voltar"} variant="ghost" onPress={back} />
+          </View>
+          <View style={{ flex: 2 }}>
+            <Btn
+              testID="create-continue-button"
+              title={step === STEPS.length - 1 ? "Publicar pedido" : "Continuar"}
+              icon={step === STEPS.length - 1 ? "checkmark" : "arrow-forward"}
+              onPress={next}
+              disabled={!canContinue}
+              loading={publishing}
+            />
+          </View>
+        </View>
+      </KeyboardAvoidingView>
+    </View>
+  );
+}

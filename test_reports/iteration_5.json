@@ -1,0 +1,52 @@
+{
+  "summary": "Iteration 5: Backend 26/26 passed (bootstrap, geo, categories, order filters/lifecycle, proposals, chat, favorites, reports, notifications, admin + 403). Frontend E2E (onboarding → home → mode switch → create wizard 6 steps → publish → worker proposal → client accept → chat → start → complete → review) executed end-to-end successfully on 390x844. Two frontend bugs found: (1) Admin 'Categorias' section crashes with 'Cannot read properties of undefined (reading map)' at admin.tsx:143 when leaking previous section's data (orders/users arrays) during section switch — this also blocks reaching Localidades/Denúncias sections in the same session; (2) order detail duplicates the 'Quem pediu' block for non-owner viewers on published orders because two conditional blocks both render.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Admin/Categories", "issue": "Race between section change and pending API responses lets non-category arrays (users/orders) flow into <Categories data={data} />, causing cat.subcategories.map to throw. Guard should also validate shape (e.g., data.every(c => Array.isArray(c.subcategories))) or cancel stale requests. Reference: /app/frontend/app/admin.tsx:92,143", "testID": "admin-section-categories", "priority": "HIGH"},
+      {"component": "OrderDetail", "issue": "Duplicate 'Quem pediu' section renders for non-owner when order has no worker. Line 193 already covers order.client for !isOwner (renders 'Quem pediu' with otherUser=order.client) and lines 199-204 render another 'Quem pediu' with order.client. Reference: /app/frontend/app/order/[id].tsx:193-204", "testID": "n/a", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [
+      {"flow": "Admin panel navigation", "issue": "After Categoria crash the entire admin route dies; subsequent Localidades/Denúncias chips are not clickable. Users must reload.", "affected_testIDs": ["admin-section-categories", "admin-section-geo", "admin-section-reports"]}
+    ],
+    "design_issues": [
+      {"screen": "OrderDetail (worker viewing published order)", "issues": ["Client card shown twice under identical 'Quem pediu' headings — confusing for the worker before sending proposal."]}
+    ],
+    "react_native_issues": [
+      {"component": "Deprecation warnings", "issue": "Console reports 'props.pointerEvents is deprecated. Use style.pointerEvents' and '\"shadow*\" style props are deprecated. Use \"boxShadow\"' — from RN 0.79/expo-router internals; low priority but noise in logs."}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_regression.py",
+    "/app/test_reports/pytest/pytest_results_iteration5.xml",
+    "/app/test_reports/it5_02_home.jpeg",
+    "/app/test_reports/it5_03_worker_mode.jpeg",
+    "/app/test_reports/it5_11_after_publish.jpeg",
+    "/app/test_reports/it5_20_worker_order.jpeg",
+    "/app/test_reports/it5_22_client_sees_proposal.jpeg",
+    "/app/test_reports/it5_23_accepted.jpeg",
+    "/app/test_reports/it5_24_chat.jpeg",
+    "/app/test_reports/it5_26_completed.jpeg",
+    "/app/test_reports/it5_33_admin.jpeg"
+  ],
+  "action_items": [
+    "Fix /app/frontend/app/admin.tsx: guard Categories rendering with Array.isArray(data) && data.every(c => Array.isArray(c.subcategories)); ideally cancel/tag stale requests via a section ref or React Query.",
+    "Fix /app/frontend/app/order/[id].tsx: remove the redundant second 'Quem pediu' block at lines 199-204 (already covered by line 193's !isOwner branch).",
+    "Optional: replace deprecated pointerEvents and shadow* style usages if reachable in app code (mostly upstream)."
+  ],
+  "critical_code_review_comments": [
+    "Admin panel does not debounce/cancel per-section fetches, so section-mismatched arrays can be shoved into the category renderer.",
+    "OrderDetail has overlapping conditional blocks for the client card; both fire for the same state (non-owner, no worker).",
+    "Order detail Star review UI was not encountered during the E2E — the mutual review submission via API is tested and passes, but a manual reload was necessary to see the stars UI after completion in the same session; consider explicit navigation/refetch after complete_order."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_regression.py",
+    "/app/test_reports/iteration_5.json"
+  ],
+  "success_rate": {"backend": "100% (26/26)", "frontend": "≈85% (E2E happy path passes; admin categories crash and duplicated client card are the only failures)"},
+  "seed_data_creation": "Backend test suite created TEST_<uuid> orders, proposal, review, chat message, favorite, report, and a throwaway cancelled order. All labelled with TAG. No cleanup endpoint exists.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Public URL: https://faze-fazedores.preview.emergentagent.com. Onboarding stored in localStorage 'faze:onboarded' — set it before tests to skip. Segmented control uses testIDs segment-client / segment-worker. Star testIDs are star-1..star-5. Activity 'Meus serviços' tab uses testID activity-tab-jobs (not -services).",
+  "rca_of_issue": "Admin categories crash RCA: /app/frontend/app/admin.tsx line 38 uses `useEffect(() => { setData(null); load(); }, [load])` where load() is section-scoped. When the user taps section chips faster than the previous request settles, an older section's response wins the setData race. Line 92 only checks Array.isArray(data), and both /admin/users and /admin/orders return arrays; when they leak into <Categories data={data}/>, line 143 `cat.subcategories.map(...)` explodes because those objects don't have subcategories. Fix: (a) also verify data.every(item => Array.isArray(item.subcategories)) before rendering Categories, and/or (b) tag each fetch with the section and drop responses whose section != current."
+}

@@ -1,0 +1,62 @@
+{
+  "summary": "Iteration 4: backend regression suite passed 5/5. Public mobile preview loads, but the fixed create wizard Continuar action is still outside the 390x844 viewport, blocking create-flow verification.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "CreateModalFixed",
+        "issue": "On the public 390x844 preview, create-order-continue-button bounding box is y=1617.36, outside the viewport; the wizard cannot advance.",
+        "testID": "create-order-continue-button",
+        "priority": "HIGH"
+      }
+    ],
+    "integration_issues": [
+      {
+        "flow": "Create order publish/reopen",
+        "issue": "Could not complete UI publish and reopen-at-step-1 verification because Continuar is untappable.",
+        "affected_testIDs": [
+          "create-order-continue-button"
+        ]
+      }
+    ],
+    "design_issues": [
+      {
+        "screen": "Create order wizard",
+        "issues": [
+          "Modal action footer is laid out far below the mobile viewport despite the ScrollView/flex footer change."
+        ]
+      }
+    ],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_regression.py",
+    "/app/test_reports/pytest/pytest_results_iteration4.xml",
+    "/app/test_reports/iteration4_failure.png"
+  ],
+  "action_items": [
+    "Fix CreateModalFixed web/mobile layout so the footer and create-order-continue-button have a viewport-bound box at 390x844; retest all four steps and reopen reset.",
+    "Align frontend API configuration with the requested EXPO_BACKEND_URL contract or explicitly preserve/document EXPO_PUBLIC_BACKEND_URL.",
+    "Implement and expose completion/rating UI if those MVP flows remain in scope."
+  ],
+  "critical_code_review_comments": [
+    "index.tsx reads EXPO_PUBLIC_BACKEND_URL, while the stated environment contract names EXPO_BACKEND_URL; current preview works only because EXPO_PUBLIC_BACKEND_URL is configured.",
+    "Completion and rating controls are absent from the frontend although backend endpoints exist and the stated MVP includes concluir/avaliar.",
+    "Several interactive controls (explore search/chips, message row, profile settings, proposal/detail actions) lack stable testIDs required by the design/test contract."
+  ],
+  "updated_files": [
+    "/app/test_reports/iteration_4.json"
+  ],
+  "success_rate": {
+    "backend": "100% (5/5)",
+    "frontend": "60% (load/navigation visible; create blocked; downstream UI not verified)"
+  },
+  "seed_data_creation": "Regression suite created TEST_regression_order, TEST proposal, and TEST message; no cleanup endpoint exists.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Public URL is https://faze-fazedores.preview.emergentagent.com. Proposal fix was previously verified in iteration 3; prioritize measuring create-order-continue-button after layout changes.",
+  "rca_of_issue": "The fixed wizard still produces a native-web layout box below the viewport when opened through the public Expo preview. Although the footer is outside the ScrollView in source, Modal/SafeAreaView sizing or parent flex sizing causes the modal content to resolve at document y≈1617. The first tap cannot execute setStep."
+}

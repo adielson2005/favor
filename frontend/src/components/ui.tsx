@@ -4,6 +4,7 @@ import React from "react";
 import { ActivityIndicator, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, TextInputProps, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { fonts } from "@/src/hooks/use-app-fonts";
 import { Colors, useTheme } from "@/src/theme";
 
 type Icon = keyof typeof Ionicons.glyphMap;
@@ -29,7 +30,7 @@ export function Btn({ title, onPress, variant = "primary", icon, small, disabled
     >
       {loading ? <ActivityIndicator color={fg} size="small" /> : (
         <>
-          <Text style={{ color: fg, fontSize: small ? 13 : 15, fontWeight: "700" }}>{title}</Text>
+          <Text style={{ color: fg, fontFamily: fonts.bodyBold, fontSize: small ? 13 : 15 }}>{title}</Text>
           {icon ? <Ionicons name={icon} size={small ? 15 : 18} color={fg} /> : null}
         </>
       )}
@@ -50,7 +51,7 @@ export function Chip({ label, active, onPress, icon, testID }: { label: string; 
       }]}
     >
       {icon ? <Ionicons name={icon} size={14} color={active ? colors.bg : colors.muted} /> : null}
-      <Text style={{ color: active ? colors.bg : colors.ink, fontSize: 13, fontWeight: "600" }}>{label}</Text>
+      <Text style={{ color: active ? colors.bg : colors.ink, fontFamily: fonts.bodySemiBold, fontSize: 13 }}>{label}</Text>
     </Pressable>
   );
 }
@@ -73,7 +74,7 @@ export function Avatar({ name, initials, size = 44 }: { name?: string; initials?
   const label = initials || (name || "?").split(" ").map((w) => w[0]).slice(0, 2).join("").toUpperCase();
   return (
     <View style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: colors.primarySoft, alignItems: "center", justifyContent: "center" }}>
-      <Text style={{ color: colors.primary, fontWeight: "800", fontSize: size * 0.36 }}>{label}</Text>
+      <Text style={{ color: colors.primary, fontFamily: fonts.bodyBold, fontSize: size * 0.36 }}>{label}</Text>
     </View>
   );
 }
@@ -83,8 +84,8 @@ export function Row({ icon, label, value, onPress, danger, testID }: { icon: Ico
   return (
     <Pressable testID={testID} onPress={onPress} style={({ pressed }) => [{ flexDirection: "row", alignItems: "center", gap: 14, minHeight: 54, opacity: pressed ? 0.6 : 1 }]}>
       <Ionicons name={icon} size={20} color={danger ? colors.danger : colors.muted} />
-      <Text style={{ flex: 1, color: danger ? colors.danger : colors.ink, fontSize: 15, fontWeight: "500" }}>{label}</Text>
-      {value ? <Text style={{ color: colors.muted, fontSize: 13 }}>{value}</Text> : null}
+      <Text style={{ flex: 1, color: danger ? colors.danger : colors.ink, fontFamily: fonts.body, fontSize: 15 }}>{label}</Text>
+      {value ? <Text style={{ color: colors.muted, fontFamily: fonts.body, fontSize: 13 }}>{value}</Text> : null}
       {onPress ? <Ionicons name="chevron-forward" size={16} color={colors.faint} /> : null}
     </Pressable>
   );
@@ -97,8 +98,8 @@ export function EmptyState({ icon, title, body, actionTitle, onAction }: { icon:
       <View style={{ width: 64, height: 64, borderRadius: 32, backgroundColor: colors.alt, alignItems: "center", justifyContent: "center", marginBottom: 6 }}>
         <Ionicons name={icon} size={26} color={colors.muted} />
       </View>
-      <Text style={{ color: colors.ink, fontSize: 16, fontWeight: "700", textAlign: "center" }}>{title}</Text>
-      {body ? <Text style={{ color: colors.muted, fontSize: 14, textAlign: "center", lineHeight: 20 }}>{body}</Text> : null}
+      <Text style={{ color: colors.ink, fontFamily: fonts.bodyBold, fontSize: 16, textAlign: "center" }}>{title}</Text>
+      {body ? <Text style={{ color: colors.muted, fontFamily: fonts.body, fontSize: 14, textAlign: "center", lineHeight: 20 }}>{body}</Text> : null}
       {actionTitle ? <View style={{ marginTop: 14 }}><Btn title={actionTitle} onPress={onAction} small variant="secondary" /></View> : null}
     </View>
   );
@@ -109,7 +110,7 @@ export function Field({ label, error, ...props }: TextInputProps & { label?: str
   const [focused, setFocused] = React.useState(false);
   return (
     <View style={{ gap: 6 }}>
-      {label ? <Text style={{ color: colors.muted, fontSize: 12, fontWeight: "700", textTransform: "uppercase", letterSpacing: 0.6 }}>{label}</Text> : null}
+      {label ? <Text style={{ color: colors.muted, fontFamily: fonts.bodyBold, fontSize: 12, textTransform: "uppercase", letterSpacing: 0.6 }}>{label}</Text> : null}
       <TextInput
         placeholderTextColor={colors.faint}
         onFocus={() => setFocused(true)}
@@ -118,10 +119,10 @@ export function Field({ label, error, ...props }: TextInputProps & { label?: str
         style={[{
           backgroundColor: colors.surface, borderWidth: 1.5, borderRadius: 14,
           borderColor: error ? colors.danger : focused ? colors.primary : colors.border,
-          color: colors.ink, fontSize: 15, paddingHorizontal: 14, paddingVertical: 13, minHeight: 50,
+          color: colors.ink, fontFamily: fonts.body, fontSize: 15, paddingHorizontal: 14, paddingVertical: 13, minHeight: 50,
         }, props.style]}
       />
-      {error ? <Text style={{ color: colors.danger, fontSize: 12 }}>{error}</Text> : null}
+      {error ? <Text style={{ color: colors.danger, fontFamily: fonts.body, fontSize: 12 }}>{error}</Text> : null}
     </View>
   );
 }
@@ -137,7 +138,7 @@ export function Segmented<T extends string>({ options, value, onChange }: { opti
           onPress={() => onChange(option.key)}
           style={{ flex: 1, height: 40, borderRadius: 11, alignItems: "center", justifyContent: "center", backgroundColor: value === option.key ? colors.surface : "transparent", ...(value === option.key && Platform.OS === "android" ? { elevation: 1 } : {}) }}
         >
-          <Text style={{ color: value === option.key ? colors.ink : colors.muted, fontSize: 13, fontWeight: "700" }}>{option.label}</Text>
+          <Text style={{ color: value === option.key ? colors.ink : colors.muted, fontFamily: fonts.bodyBold, fontSize: 13 }}>{option.label}</Text>
         </Pressable>
       ))}
     </View>
@@ -155,7 +156,7 @@ export function Sheet({ visible, onClose, title, children, scroll = true }: { vi
         <View style={{ width: 40, height: 4, borderRadius: 2, backgroundColor: colors.border, alignSelf: "center", marginTop: 10 }} />
         {title ? (
           <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 20, paddingTop: 14, paddingBottom: 4 }}>
-            <Text style={{ color: colors.ink, fontSize: 18, fontWeight: "800" }}>{title}</Text>
+            <Text style={{ color: colors.ink, fontFamily: fonts.headingExtraBold, fontSize: 18 }}>{title}</Text>
             <Pressable onPress={onClose} hitSlop={8} testID="sheet-close"><Ionicons name="close" size={22} color={colors.muted} /></Pressable>
           </View>
         ) : null}
@@ -169,8 +170,8 @@ export function SectionTitle({ title, action, onAction }: { title: string; actio
   const { colors } = useTheme();
   return (
     <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-      <Text style={{ color: colors.ink, fontSize: 17, fontWeight: "800" }}>{title}</Text>
-      {action ? <Pressable onPress={onAction} hitSlop={8}><Text style={{ color: colors.primary, fontSize: 13, fontWeight: "700" }}>{action}</Text></Pressable> : null}
+      <Text style={{ color: colors.ink, fontFamily: fonts.headingExtraBold, fontSize: 17 }}>{title}</Text>
+      {action ? <Pressable onPress={onAction} hitSlop={8}><Text style={{ color: colors.primary, fontFamily: fonts.bodyBold, fontSize: 13 }}>{action}</Text></Pressable> : null}
     </View>
   );
 }
@@ -183,7 +184,7 @@ export function Skeleton({ height = 84, radius = 16 }: { height?: number; radius
 export const shared = (colors: Colors) => StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
   pad: { paddingHorizontal: 20 },
-  h1: { color: colors.ink, fontSize: 24, fontWeight: "800", letterSpacing: -0.5 },
-  body: { color: colors.muted, fontSize: 14, lineHeight: 21 },
+  h1: { color: colors.ink, fontFamily: fonts.headingExtraBold, fontSize: 24, letterSpacing: -0.5 },
+  body: { color: colors.muted, fontFamily: fonts.body, fontSize: 14, lineHeight: 21 },
   divider: { height: 1, backgroundColor: colors.border, marginVertical: 4 },
 });

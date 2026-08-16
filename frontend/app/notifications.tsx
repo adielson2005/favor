@@ -8,6 +8,7 @@ import { api } from "@/src/api";
 import { EmptyState, Skeleton } from "@/src/components/ui";
 import { useApp } from "@/src/state";
 import { useTheme } from "@/src/theme";
+import { safeBack } from "@/src/utils/navigation";
 
 const ICONS: Record<string, keyof typeof Ionicons.glyphMap> = {
   proposal: "mail-outline", accept: "checkmark-circle-outline", message: "chatbubble-outline",
@@ -16,24 +17,24 @@ const ICONS: Record<string, keyof typeof Ionicons.glyphMap> = {
 
 export default function Notifications() {
   const { colors } = useTheme();
-  const { me, refreshUnread } = useApp();
+  const { refreshUnread } = useApp();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const [items, setItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    api.get(`/notifications?user_id=${me.id}`)
+    api.get(`/notifications`)
       .then((d) => setItems(d.items || []))
       .catch(() => {})
       .finally(() => setLoading(false));
-    api.post(`/notifications/read?user_id=${me.id}`).then(refreshUnread).catch(() => {});
-  }, [me.id, refreshUnread]);
+    api.post(`/notifications/read`).then(refreshUnread).catch(() => {});
+  }, [refreshUnread]);
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg, paddingTop: insets.top + 8 }}>
       <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 20, height: 48, gap: 14 }}>
-        <Pressable onPress={() => router.back()} hitSlop={10}><Ionicons name="arrow-back" size={24} color={colors.ink} /></Pressable>
+        <Pressable onPress={() => safeBack(router, "/(tabs)/home")} hitSlop={10}><Ionicons name="arrow-back" size={24} color={colors.ink} /></Pressable>
         <Text style={{ color: colors.ink, fontSize: 18, fontWeight: "800" }}>Notificações</Text>
       </View>
       {loading ? (

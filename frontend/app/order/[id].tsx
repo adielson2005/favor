@@ -3,14 +3,17 @@ import * as Haptics from "expo-haptics";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import React, { useCallback, useState } from "react";
 import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, Text, View } from "react-native";
+import Animated, { FadeIn, ZoomIn } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { api, Order, Proposal } from "@/src/api";
 import { Avatar, Btn, Chip, EmptyState, Field, Sheet, Stars } from "@/src/components/ui";
+import { fonts } from "@/src/hooks/use-app-fonts";
 import { useApp } from "@/src/state";
 import { useTheme } from "@/src/theme";
+import { safeBack } from "@/src/utils/navigation";
 
-const FIELD_LABELS: Record<string, string> = { origem: "De onde", destino: "Para onde", local_compra: "Onde comprar", equipamento: "Equipamento", veiculo: "Veículo", pet: "Pet", prazo: "Prazo" };
+const FIELD_LABELS: Record<string, string> = { origem: "De onde", destino: "Para onde", local_compra: "Onde comprar", equipamento: "Equipamento", veiculo: "Veículo", pet: "Pet", prazo: "Prazo", ambiente: "Ambiente/item", documento: "Documento", evento: "Evento" };
 const REPORT_REASONS = ["Golpe ou fraude", "Conteúdo inadequado", "Pedido falso", "Comportamento abusivo", "Outro"];
 
 export default function OrderDetail() {
@@ -44,14 +47,14 @@ export default function OrderDetail() {
       setOrder(data);
       const props = await api.get(`/orders/${id}/proposals`);
       setProposals(props);
-      const favs = await api.get(`/favorites?user_id=${me.id}`);
+      const favs = await api.get(`/favorites`);
       setFavorited((favs.order_ids || []).includes(id));
     } catch { /* order may be gone */ }
-  }, [id, me.id]);
+  }, [id, me]);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
-  if (!order) {
+  if (!order || !me) {
     return <View style={{ flex: 1, backgroundColor: colors.bg, alignItems: "center", justifyContent: "center" }}><ActivityIndicator color={colors.primary} /></View>;
   }
 
@@ -66,14 +69,14 @@ export default function OrderDetail() {
   const toggleFavorite = async () => {
     haptic();
     setFavorited(!favorited);
-    try { await api.post("/favorites/toggle", { user_id: me.id, order_id: order.id }); } catch { setFavorited(favorited); }
+    try { await api.post("/favorites/toggle", { order_id: order.id }); } catch { setFavorited(favorited); }
   };
 
   const sendProposal = async () => {
     if (!amount) return;
     setSending(true);
     try {
-      await api.post(`/orders/${order.id}/proposals`, { worker_id: me.id, amount: Number(amount), message, eta });
+      await api.post(`/orders/${order.id}/proposals`, { amount: Number(amount), message, eta });
       setProposalOpen(false);
       setAmount(""); setEta(""); setMessage("");
       haptic();
@@ -83,7 +86,7 @@ export default function OrderDetail() {
 
   const acceptProposal = async (proposal: Proposal) => {
     try {
-      await api.post(`/proposals/${proposal.id}/accept?user_id=${me.id}`);
+      await api.post(`/proposals/${proposal.id}/accept`);
       haptic();
       load();
     } catch (e: any) { Alert.alert("Ops", e.message); }
@@ -91,7 +94,7 @@ export default function OrderDetail() {
 
   const changeStatus = async (action: "start" | "complete" | "cancel") => {
     try {
-      await api.post(`/orders/${order.id}/${action}?user_id=${me.id}`);
+      await api.post(`/orders/${order.id}/${action}`);
       haptic();
       load();
     } catch (e: any) { Alert.alert("Ops", e.message); }
@@ -101,7 +104,7 @@ export default function OrderDetail() {
     if (!stars || !reviewTarget) return;
     setSending(true);
     try {
-      await api.post("/reviews", { order_id: order.id, from_id: me.id, to_id: reviewTarget.id, stars, comment: reviewComment });
+      await api.post("/reviews", { order_id: order.id, to_id: reviewTarget.id, stars, comment: reviewComment });
       haptic();
       load();
     } catch (e: any) { Alert.alert("Ops", e.message); } finally { setSending(false); }
@@ -110,7 +113,7 @@ export default function OrderDetail() {
   const sendReport = async () => {
     setSending(true);
     try {
-      await api.post("/reports", { reporter_id: me.id, target_type: "order", target_id: order.id, reason: reportReason, details: reportDetails });
+      await api.post("/reports", { target_type: "order", target_id: order.id, reason: reportReason, details: reportDetails });
       setReportOpen(false); setReportDetails("");
       Alert.alert("Denúncia enviada", "Nossa equipe vai analisar. Obrigado por ajudar a manter o FAZÊ seguro.");
     } catch { Alert.alert("Ops", "Não conseguimos enviar agora."); } finally { setSending(false); }
@@ -123,7 +126,7 @@ export default function OrderDetail() {
     <View style={{ flex: 1, backgroundColor: colors.bg, paddingTop: insets.top + 8 }}>
       {/* Header */}
       <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 20, height: 48, gap: 16 }}>
-        <Pressable testID="order-back-button" onPress={() => router.back()} hitSlop={10}><Ionicons name="arrow-back" size={24} color={colors.ink} /></Pressable>
+        <Pressable testID="order-back-button" onPress={() => safeBack(router, "/(tabs)/home")} hitSlop={10}><Ionicons name="arrow-back" size={24} color={colors.ink} /></Pressable>
         <Text style={{ flex: 1, color: colors.ink, fontSize: 16, fontWeight: "700" }}>Pedido</Text>
         <Pressable testID="favorite-button" onPress={toggleFavorite} hitSlop={8}>
           <Ionicons name={favorited ? "heart" : "heart-outline"} size={22} color={favorited ? colors.danger : colors.ink} />
@@ -151,7 +154,7 @@ export default function OrderDetail() {
             <Text style={{ color: colors.muted, fontSize: 12, fontWeight: "600" }}>{order.type === "favor" ? "Favor" : "Serviço"}</Text>
           </View>
         </View>
-        <Text style={{ color: colors.ink, fontSize: 23, fontWeight: "800", letterSpacing: -0.5 }}>{order.title}</Text>
+        <Text style={{ color: colors.ink, fontFamily: fonts.headingExtraBold, fontSize: 23, letterSpacing: -0.5 }}>{order.title}</Text>
         {order.description ? <Text style={{ color: colors.muted, fontSize: 14, lineHeight: 21, marginTop: 8 }}>{order.description}</Text> : null}
 
         {/* Info */}
@@ -164,13 +167,13 @@ export default function OrderDetail() {
         </View>
 
         {/* Budget */}
-        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderRadius: 16, padding: 16, marginTop: 16 }}>
+        <Animated.View key={`budget-${order.status}`} entering={FadeIn.duration(220)} style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderRadius: 16, padding: 16, marginTop: 16 }}>
           <View>
             <Text style={{ color: colors.faint, fontSize: 11, fontWeight: "700", textTransform: "uppercase", letterSpacing: 0.8 }}>{order.accepted_amount ? "Valor combinado" : "Orçamento"}</Text>
-            <Text style={{ color: colors.green, fontSize: 26, fontWeight: "800" }}>R$ {order.accepted_amount || order.budget}</Text>
+            <Text style={{ color: colors.green, fontFamily: fonts.headingExtraBold, fontSize: 26 }}>R$ {order.accepted_amount || order.budget}</Text>
           </View>
           <Text style={{ color: order.status === "completed" ? colors.green : colors.primary, fontSize: 13, fontWeight: "700" }}>{order.status_label}</Text>
-        </View>
+        </Animated.View>
 
         {/* Status timeline */}
         {statusIndex >= 0 && (
@@ -178,12 +181,12 @@ export default function OrderDetail() {
             {["Aceito", "Em andamento", "Concluído"].map((step, i) => (
               <React.Fragment key={step}>
                 {i > 0 && <View style={{ flex: 1, height: 2, backgroundColor: i <= statusIndex ? colors.green : colors.border, marginHorizontal: 4 }} />}
-                <View style={{ alignItems: "center", gap: 5 }}>
+                <Animated.View key={`step-${i}-${i <= statusIndex}`} entering={i <= statusIndex ? ZoomIn.duration(240) : undefined} style={{ alignItems: "center", gap: 5 }}>
                   <View style={{ width: 24, height: 24, borderRadius: 12, backgroundColor: i <= statusIndex ? colors.green : colors.alt, alignItems: "center", justifyContent: "center" }}>
                     <Ionicons name={i < statusIndex || order.status === "completed" && i === 2 ? "checkmark" : "ellipse"} size={i <= statusIndex ? 13 : 8} color={i <= statusIndex ? "#FFF" : colors.faint} />
                   </View>
                   <Text style={{ color: i <= statusIndex ? colors.ink : colors.faint, fontSize: 11, fontWeight: "600" }}>{step}</Text>
-                </View>
+                </Animated.View>
               </React.Fragment>
             ))}
           </View>

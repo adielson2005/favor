@@ -5,15 +5,17 @@ import { Alert, Pressable, ScrollView, Switch, Text, TextInput, View } from "rea
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { api } from "@/src/api";
+import { useAuth } from "@/src/auth";
 import { Btn, Chip } from "@/src/components/ui";
 import { useTheme } from "@/src/theme";
+import { safeBack } from "@/src/utils/navigation";
 
-const ADMIN = "demo-admin";
-type Section = "overview" | "users" | "orders" | "categories" | "geo" | "reports";
+type Section = "overview" | "users" | "orders" | "categories" | "geo" | "reports" | "audit";
 const SECTIONS: { key: Section; label: string }[] = [
   { key: "overview", label: "Visão geral" }, { key: "users", label: "Usuários" },
   { key: "orders", label: "Pedidos" }, { key: "categories", label: "Categorias" },
   { key: "geo", label: "Localidades" }, { key: "reports", label: "Denúncias" },
+  { key: "audit", label: "Auditoria" },
 ];
 const HOOD_KINDS = ["bairro", "complexo", "regiao", "distrito", "localidade"];
 
@@ -21,22 +23,27 @@ export default function Admin() {
   const { colors } = useTheme();
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { user } = useAuth();
   const [section, setSection] = useState<Section>("overview");
   const [payload, setPayload] = useState<{ sec: Section; value: any } | null>(null);
 
   const ENDPOINTS: Record<Section, string> = {
     overview: "/admin/overview", users: "/admin/users", orders: "/admin/orders",
-    categories: "/admin/categories", geo: "/admin/geo", reports: "/admin/reports",
+    categories: "/admin/categories", geo: "/admin/geo", reports: "/admin/reports", audit: "/admin/audit",
   };
 
   const load = useCallback(async () => {
     try {
-      const value = await api.get(`${ENDPOINTS[section]}?admin_id=${ADMIN}`);
+      const value = await api.get(ENDPOINTS[section]);
       setPayload({ sec: section, value });
     } catch (e: any) { Alert.alert("Ops", e.message); }
   }, [section]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => { setPayload(null); load(); }, [load]);
+  useEffect(() => {
+    if (!user?.is_admin) { router.replace("/(tabs)/profile"); return; }
+    setPayload(null);
+    load();
+  }, [load, user, router]);
 
   const data = payload?.sec === section ? payload.value : null;
 
@@ -44,10 +51,12 @@ export default function Admin() {
     try { await fn(); load(); } catch (e: any) { Alert.alert("Ops", e.message); }
   };
 
+  if (!user?.is_admin) return null;
+
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg, paddingTop: insets.top + 8 }}>
       <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 20, height: 48, gap: 14 }}>
-        <Pressable onPress={() => router.back()} hitSlop={10}><Ionicons name="arrow-back" size={24} color={colors.ink} /></Pressable>
+        <Pressable onPress={() => safeBack(router, "/(tabs)/profile")} hitSlop={10}><Ionicons name="arrow-back" size={24} color={colors.ink} /></Pressable>
         <Text style={{ color: colors.ink, fontSize: 18, fontWeight: "800" }}>Administração</Text>
       </View>
       <View>
@@ -76,8 +85,8 @@ export default function Admin() {
             </View>
             <Text style={{ color: colors.muted, fontSize: 12 }}>★ {user.rating} · {user.jobs_done} serviços{user.is_admin ? " · admin" : ""}</Text>
             <View style={{ flexDirection: "row", gap: 8 }}>
-              <View style={{ flex: 1 }}><Btn small variant={user.blocked ? "secondary" : "danger"} title={user.blocked ? "Desbloquear" : "Bloquear"} onPress={() => act(() => api.post(`/admin/users/${user.id}/block?admin_id=${ADMIN}`))} /></View>
-              <View style={{ flex: 1 }}><Btn small variant="secondary" title={user.verified_identity ? "Remover selo" : "Verificar"} onPress={() => act(() => api.post(`/admin/users/${user.id}/verify?admin_id=${ADMIN}`))} /></View>
+              <View style={{ flex: 1 }}><Btn small variant={user.blocked ? "secondary" : "danger"} title={user.blocked ? "Desbloquear" : "Bloquear"} onPress={() => act(() => api.post(`/admin/users/${user.id}/block`))} /></View>
+              <View style={{ flex: 1 }}><Btn small variant="secondary" title={user.verified_identity ? "Remover selo" : "Verificar"} onPress={() => act(() => api.post(`/admin/users/${user.id}/verify`))} /></View>
             </View>
           </View>
         ))}
@@ -87,7 +96,7 @@ export default function Admin() {
             <Text style={{ color: colors.ink, fontSize: 14, fontWeight: "700" }}>{order.title}</Text>
             <Text style={{ color: colors.muted, fontSize: 12 }}>R$ {order.budget} · {order.status}</Text>
             {order.status !== "cancelled" && order.status !== "completed" && (
-              <Btn small variant="danger" title="Cancelar pedido" onPress={() => act(() => api.post(`/admin/orders/${order.id}/cancel?admin_id=${ADMIN}`))} />
+              <Btn small variant="danger" title="Cancelar pedido" onPress={() => act(() => api.post(`/admin/orders/${order.id}/cancel`))} />
             )}
           </View>
         ))}
@@ -105,7 +114,19 @@ export default function Admin() {
             </View>
             {report.details ? <Text style={{ color: colors.muted, fontSize: 13 }}>{report.details}</Text> : null}
             <Text style={{ color: colors.faint, fontSize: 12 }}>Por {report.reporter_name} · alvo: {report.target_type}</Text>
-            {report.status === "open" && <Btn small variant="secondary" title="Marcar como resolvida" onPress={() => act(() => api.post(`/admin/reports/${report.id}/resolve?admin_id=${ADMIN}`))} />}
+            {report.status === "open" && <Btn small variant="secondary" title="Marcar como resolvida" onPress={() => act(() => api.post(`/admin/reports/${report.id}/resolve`))} />}
+          </View>
+        )))}
+
+        {section === "audit" && Array.isArray(data) && (data.length === 0 ? (
+          <Text style={{ color: colors.muted, fontSize: 14, textAlign: "center", marginTop: 24 }}>Nenhuma ação registrada ainda.</Text>
+        ) : data.map((entry: any) => (
+          <View key={entry.id} style={{ flexDirection: "row", alignItems: "center", gap: 10, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderRadius: 16, padding: 14 }}>
+            <View style={{ flex: 1 }}>
+              <Text style={{ color: colors.ink, fontSize: 13, fontWeight: "700" }}>{entry.admin_name} · {entry.action}</Text>
+              <Text style={{ color: colors.muted, fontSize: 12 }}>{entry.target}</Text>
+            </View>
+            <Text style={{ color: colors.faint, fontSize: 11 }}>{new Date(entry.created_at).toLocaleDateString("pt-BR")}</Text>
           </View>
         )))}
       </ScrollView>
@@ -134,26 +155,26 @@ function Categories({ data, act }: { data: any[]; act: (fn: () => Promise<any>) 
   const { colors } = useTheme();
   return (
     <View style={{ gap: 12 }}>
-      <AddInline placeholder="Nova categoria..." onAdd={(name) => act(() => api.post(`/admin/categories?admin_id=${ADMIN}`, { name }))} />
+      <AddInline placeholder="Nova categoria..." onAdd={(name) => act(() => api.post(`/admin/categories`, { name }))} />
       {data.map((cat: any) => (
         <View key={cat.id} style={{ backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderRadius: 16, padding: 14, gap: 10 }}>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
             <Ionicons name={cat.icon} size={17} color={colors.primary} />
             <Text style={{ color: colors.ink, fontSize: 14, fontWeight: "700", flex: 1 }}>{cat.name}</Text>
-            <Switch value={cat.active} onValueChange={(v) => act(() => api.patch(`/admin/categories/${cat.id}?admin_id=${ADMIN}`, { active: v }))} trackColor={{ true: colors.primary }} />
+            <Switch value={cat.active} onValueChange={(v) => act(() => api.patch(`/admin/categories/${cat.id}`, { active: v }))} trackColor={{ true: colors.primary }} />
           </View>
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
             {cat.subcategories.map((sub: any) => (
               <Pressable
                 key={sub.id}
-                onPress={() => act(() => api.patch(`/admin/subcategories/${sub.id}?admin_id=${ADMIN}`, { active: !sub.active }))}
+                onPress={() => act(() => api.patch(`/admin/subcategories/${sub.id}`, { active: !sub.active }))}
                 style={{ paddingHorizontal: 10, paddingVertical: 5, borderRadius: 10, backgroundColor: sub.active ? colors.alt : "transparent", borderWidth: 1, borderColor: colors.border, opacity: sub.active ? 1 : 0.45 }}
               >
                 <Text style={{ color: colors.muted, fontSize: 11, fontWeight: "600", textDecorationLine: sub.active ? "none" : "line-through" }}>{sub.name}</Text>
               </Pressable>
             ))}
           </View>
-          <AddInline placeholder="Nova subcategoria..." onAdd={(name) => act(() => api.post(`/admin/subcategories?admin_id=${ADMIN}`, { category_id: cat.id, name }))} />
+          <AddInline placeholder="Nova subcategoria..." onAdd={(name) => act(() => api.post(`/admin/subcategories`, { category_id: cat.id, name }))} />
         </View>
       ))}
     </View>
@@ -168,20 +189,20 @@ function Geo({ data, act }: { data: { states: any[]; cities: any[]; neighborhood
     <View style={{ gap: 16 }}>
       <Text style={label}>Estados</Text>
       {data.states.map((state) => (
-        <GeoRow key={state.id} name={`${state.name} (${state.uf})`} active={state.active} onToggle={(v) => act(() => api.patch(`/admin/geo/states/${state.id}?admin_id=${ADMIN}`, { active: v }))} />
+        <GeoRow key={state.id} name={`${state.name} (${state.uf})`} active={state.active} onToggle={(v) => act(() => api.patch(`/admin/geo/states/${state.id}`, { active: v }))} />
       ))}
       <Text style={label}>Cidades</Text>
       {data.cities.map((city) => (
-        <GeoRow key={city.id} name={city.name} active={city.active} onToggle={(v) => act(() => api.patch(`/admin/geo/cities/${city.id}?admin_id=${ADMIN}`, { active: v }))} />
+        <GeoRow key={city.id} name={city.name} active={city.active} onToggle={(v) => act(() => api.patch(`/admin/geo/cities/${city.id}`, { active: v }))} />
       ))}
-      <AddInline placeholder="Nova cidade (PA)..." onAdd={(name) => act(() => api.post(`/admin/geo/cities?admin_id=${ADMIN}`, { state_id: "st-pa", name }))} />
+      <AddInline placeholder="Nova cidade (PA)..." onAdd={(name) => act(() => api.post(`/admin/geo/cities`, { state_id: "st-pa", name }))} />
       <Text style={label}>Bairros e regiões · Parauapebas ({data.neighborhoods.length})</Text>
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
         {HOOD_KINDS.map((k) => <Chip key={k} label={k} active={kind === k} onPress={() => setKind(k)} />)}
       </View>
-      <AddInline placeholder={`Novo ${kind}...`} onAdd={(name) => act(() => api.post(`/admin/geo/neighborhoods?admin_id=${ADMIN}`, { city_id: "city-parauapebas", name, kind }))} />
+      <AddInline placeholder={`Novo ${kind}...`} onAdd={(name) => act(() => api.post(`/admin/geo/neighborhoods`, { city_id: "city-parauapebas", name, kind }))} />
       {data.neighborhoods.map((hood) => (
-        <GeoRow key={hood.id} name={`${hood.name}${hood.kind !== "bairro" ? ` · ${hood.kind}` : ""}`} active={hood.active} onToggle={(v) => act(() => api.patch(`/admin/geo/neighborhoods/${hood.id}?admin_id=${ADMIN}`, { active: v }))} />
+        <GeoRow key={hood.id} name={`${hood.name}${hood.kind !== "bairro" ? ` · ${hood.kind}` : ""}`} active={hood.active} onToggle={(v) => act(() => api.patch(`/admin/geo/neighborhoods/${hood.id}`, { active: v }))} />
       ))}
     </View>
   );

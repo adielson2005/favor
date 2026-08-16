@@ -3,12 +3,15 @@ import * as Haptics from "expo-haptics";
 import { useRouter } from "expo-router";
 import React, { useMemo, useState } from "react";
 import { Alert, KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import Animated, { FadeIn, FadeOut } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { api } from "@/src/api";
 import { Btn, Chip, Field } from "@/src/components/ui";
+import { fonts } from "@/src/hooks/use-app-fonts";
 import { useApp } from "@/src/state";
-import { useTheme } from "@/src/theme";
+import { type, useTheme } from "@/src/theme";
+import { safeBack } from "@/src/utils/navigation";
 
 const EXTRA_FIELDS: Record<string, { key: string; label: string; placeholder: string }[]> = {
   "cat-entregas": [
@@ -16,9 +19,12 @@ const EXTRA_FIELDS: Record<string, { key: string; label: string; placeholder: st
     { key: "destino", label: "Para onde?", placeholder: "Ex: Rua B, Cidade Nova" },
   ],
   "cat-compras": [{ key: "local_compra", label: "Onde comprar?", placeholder: "Ex: Supermercado do bairro" }],
+  "cat-casa": [{ key: "ambiente", label: "Qual ambiente ou item?", placeholder: "Ex: Guarda-roupa de 6 portas" }],
   "cat-tecnologia": [{ key: "equipamento", label: "Qual equipamento?", placeholder: "Ex: Notebook Dell" }],
   "cat-veiculos": [{ key: "veiculo", label: "Qual veículo?", placeholder: "Ex: Honda CG 160" }],
   "cat-pets": [{ key: "pet", label: "Sobre o pet", placeholder: "Ex: Golden retriever, dócil" }],
+  "cat-documentos": [{ key: "documento", label: "Qual documento?", placeholder: "Ex: Envelope lacrado" }],
+  "cat-eventos": [{ key: "evento", label: "Qual evento?", placeholder: "Ex: Aniversário no salão de festas" }],
   "cat-profissionais": [{ key: "prazo", label: "Prazo", placeholder: "Ex: Até sexta-feira" }],
 };
 
@@ -26,7 +32,7 @@ const DATES = ["Hoje", "Amanhã", "Esta semana", "A combinar"];
 
 export default function Create() {
   const { colors } = useTheme();
-  const { categories, neighborhoods, city, me, mode, setMode } = useApp();
+  const { categories, neighborhoods, city } = useApp();
   const router = useRouter();
   const insets = useSafeAreaInsets();
 
@@ -65,14 +71,12 @@ export default function Create() {
   const publish = async () => {
     setPublishing(true);
     try {
-      const clientId = mode === "client" ? me.id : "demo-client";
-      if (mode !== "client") setMode("client");
       const order = await api.post("/orders", {
         title: title.trim(), description: description.trim(), type,
         category_id: categoryId, subcategory_id: subcategoryId,
         city_id: city?.id || "city-parauapebas", neighborhood_id: hoodId,
         date_label: dateLabel, time_label: timeLabel.trim(), budget: Number(budget),
-        fields, client_id: clientId,
+        fields,
       });
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       router.replace(`/order/${order.id}?published=1`);
@@ -83,10 +87,10 @@ export default function Create() {
   };
 
   const next = () => (step < STEPS.length - 1 ? setStep(step + 1) : publish());
-  const back = () => (step > 0 ? setStep(step - 1) : router.back());
+  const back = () => (step > 0 ? setStep(step - 1) : safeBack(router, "/(tabs)/home"));
 
-  const label = { color: colors.ink, fontSize: 23, fontWeight: "800" as const, letterSpacing: -0.5, marginBottom: 6 };
-  const hint = { color: colors.muted, fontSize: 14, marginBottom: 18 };
+  const label = { color: colors.ink, ...type.h1, marginBottom: 6 };
+  const hint = { color: colors.muted, ...type.body, marginBottom: 18 };
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg, paddingTop: Platform.OS === "ios" ? 12 : insets.top + 8 }}>
@@ -95,7 +99,7 @@ export default function Create() {
         <Pressable testID="create-close-button" onPress={back} hitSlop={10}>
           <Ionicons name={step === 0 ? "close" : "arrow-back"} size={24} color={colors.ink} />
         </Pressable>
-        <Text style={{ color: colors.ink, fontSize: 16, fontWeight: "700", flex: 1 }}>Novo pedido</Text>
+        <Text style={{ color: colors.ink, fontFamily: fonts.headingExtraBold, fontSize: 16, flex: 1 }}>Novo pedido</Text>
         <Text style={{ color: colors.faint, fontSize: 13, fontWeight: "600" }}>{step + 1}/{STEPS.length}</Text>
       </View>
       <View style={{ height: 3, backgroundColor: colors.alt, marginHorizontal: 20, borderRadius: 2, marginBottom: 8 }}>
@@ -104,6 +108,7 @@ export default function Create() {
 
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
         <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 20, paddingBottom: 40 }} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+        <Animated.View key={stepKey} entering={FadeIn.duration(180)} exiting={FadeOut.duration(120)}>
           {stepKey === "need" && (
             <View>
               <Text style={label}>O que você precisa?</Text>
@@ -232,6 +237,7 @@ export default function Create() {
               </View>
             </View>
           )}
+        </Animated.View>
         </ScrollView>
 
         {/* Fixed footer — outside the ScrollView */}

@@ -9,6 +9,7 @@ import { OrderCard } from "@/src/components/OrderCard";
 import { Avatar, Chip, EmptyState, Skeleton, Stars } from "@/src/components/ui";
 import { useApp } from "@/src/state";
 import { useTheme } from "@/src/theme";
+import { safeBack } from "@/src/utils/navigation";
 
 type TabKey = "orders" | "jobs" | "favorites" | "reviews";
 const TABS: { key: TabKey; label: string }[] = [
@@ -31,14 +32,15 @@ export default function Activity() {
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
+    if (!me) return;
     setLoading(true);
     try {
       if (tab === "orders") setOrders(await api.get(`/orders?client_id=${me.id}&status=${ALL_STATUS}`));
       else if (tab === "jobs") setOrders(await api.get(`/orders?worker_id=${me.id}&status=${ALL_STATUS}`));
-      else if (tab === "favorites") setOrders((await api.get(`/favorites?user_id=${me.id}`)).orders);
+      else if (tab === "favorites") setOrders((await api.get(`/favorites`)).orders);
       else setReviews(await api.get(`/users/${me.id}/reviews`));
     } catch { /* empty state shown */ } finally { setLoading(false); }
-  }, [tab, me.id]);
+  }, [tab, me]);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
@@ -52,7 +54,7 @@ export default function Activity() {
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg, paddingTop: insets.top + 8 }}>
       <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 20, height: 48, gap: 14 }}>
-        <Pressable onPress={() => router.back()} hitSlop={10}><Ionicons name="arrow-back" size={24} color={colors.ink} /></Pressable>
+        <Pressable onPress={() => safeBack(router, "/(tabs)/profile")} hitSlop={10}><Ionicons name="arrow-back" size={24} color={colors.ink} /></Pressable>
         <Text style={{ color: colors.ink, fontSize: 18, fontWeight: "800" }}>Minha atividade</Text>
       </View>
       <View style={{ marginTop: 6, marginBottom: 4 }}>
@@ -86,7 +88,7 @@ export default function Activity() {
           data={orders}
           keyExtractor={(item) => item.id}
           contentContainerStyle={{ padding: 20, gap: 10, flexGrow: 1 }}
-          renderItem={({ item }) => <OrderCard order={item} showStatus onPress={() => router.push(`/order/${item.id}`)} />}
+          renderItem={({ item, index }) => <OrderCard order={item} index={index} showStatus onPress={() => router.push(`/order/${item.id}`)} />}
           ListEmptyComponent={<EmptyState icon={empty.icon} title={empty.title} actionTitle={empty.action} onAction={empty.go} />}
         />
       )}

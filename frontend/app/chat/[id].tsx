@@ -7,8 +7,10 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { api, Message, Order } from "@/src/api";
 import { Avatar } from "@/src/components/ui";
+import { fonts } from "@/src/hooks/use-app-fonts";
 import { useApp } from "@/src/state";
 import { useTheme } from "@/src/theme";
+import { safeBack } from "@/src/utils/navigation";
 
 export default function Chat() {
   const { colors } = useTheme();
@@ -47,7 +49,7 @@ export default function Chat() {
 
   const send = async (imageB64?: string) => {
     if (!imageB64 && !text.trim()) return;
-    const body = { sender_id: me.id, text: text.trim(), image_b64: imageB64 };
+    const body = { text: text.trim(), image_b64: imageB64 };
     setText("");
     setSending(true);
     try {
@@ -75,16 +77,16 @@ export default function Chat() {
     }
   };
 
-  const other = order ? (order.client_id === me.id ? order.worker : order.client) : null;
+  const other = order && me ? (order.client_id === me.id ? order.worker : order.client) : null;
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg, paddingTop: insets.top + 8 }}>
       {/* Header */}
       <View style={{ flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 20, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: colors.border }}>
-        <Pressable testID="chat-back-button" onPress={() => router.back()} hitSlop={10}><Ionicons name="arrow-back" size={24} color={colors.ink} /></Pressable>
+        <Pressable testID="chat-back-button" onPress={() => safeBack(router, "/(tabs)/messages")} hitSlop={10}><Ionicons name="arrow-back" size={24} color={colors.ink} /></Pressable>
         <Avatar name={other?.name} initials={other?.initials} size={38} />
         <View style={{ flex: 1 }}>
-          <Text style={{ color: colors.ink, fontSize: 15, fontWeight: "700" }}>{other?.name || "Conversa"}</Text>
+          <Text style={{ color: colors.ink, fontFamily: fonts.headingBold, fontSize: 15 }}>{other?.name || "Conversa"}</Text>
           <Text style={{ color: colors.muted, fontSize: 12 }} numberOfLines={1}>{order?.title}{order ? ` · ${order.status_label}` : ""}</Text>
         </View>
         <Pressable testID="chat-order-button" onPress={() => router.push(`/order/${id}`)} hitSlop={8}>
@@ -106,7 +108,7 @@ export default function Chat() {
                 </View>
               );
             }
-            const mine = item.sender_id === me.id;
+            const mine = !!me && item.sender_id === me.id;
             return (
               <View style={{ alignSelf: mine ? "flex-end" : "flex-start", maxWidth: "80%" }}>
                 {item.image_b64 ? (

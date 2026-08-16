@@ -4,7 +4,9 @@ import React, { useRef, useState } from "react";
 import { Dimensions, Pressable, ScrollView, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { Brand } from "@/src/components/Logo";
 import { Btn } from "@/src/components/ui";
+import { fonts } from "@/src/hooks/use-app-fonts";
 import { useTheme } from "@/src/theme";
 import { storage } from "@/src/utils/storage";
 
@@ -35,8 +37,8 @@ export default function Onboarding() {
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg, paddingTop: insets.top + 12, paddingBottom: Math.max(insets.bottom, 16) }}>
       <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 24 }}>
-        <Text style={{ fontSize: 22, fontWeight: "800", color: colors.primary, letterSpacing: -1 }}>FAZÊ</Text>
-        <Pressable onPress={finish} hitSlop={10} testID="onboarding-skip"><Text style={{ color: colors.muted, fontWeight: "600", fontSize: 14 }}>Pular</Text></Pressable>
+        <Brand size={30} />
+        <Pressable onPress={finish} hitSlop={10} testID="onboarding-skip"><Text style={{ color: colors.muted, fontFamily: fonts.bodySemiBold, fontSize: 14 }}>Pular</Text></Pressable>
       </View>
       <ScrollView
         ref={scrollRef}
@@ -50,8 +52,8 @@ export default function Onboarding() {
             <View style={{ width: 96, height: 96, borderRadius: 48, backgroundColor: colors.primarySoft, alignItems: "center", justifyContent: "center" }}>
               <Ionicons name={slide.icon} size={40} color={colors.primary} />
             </View>
-            <Text style={{ color: colors.ink, fontSize: 26, fontWeight: "800", textAlign: "center", letterSpacing: -0.5 }}>{slide.title}</Text>
-            <Text style={{ color: colors.muted, fontSize: 15, textAlign: "center", lineHeight: 23 }}>{slide.body}</Text>
+            <Text style={{ color: colors.ink, fontFamily: fonts.headingExtraBold, fontSize: 26, textAlign: "center", letterSpacing: -0.5 }}>{slide.title}</Text>
+            <Text style={{ color: colors.muted, fontFamily: fonts.body, fontSize: 15, textAlign: "center", lineHeight: 23 }}>{slide.body}</Text>
           </View>
         ))}
       </ScrollView>

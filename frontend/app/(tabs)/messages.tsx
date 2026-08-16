@@ -12,15 +12,14 @@ type Conversation = { order: Order; other: User | null; last_message: Message | 
 
 export default function Messages() {
   const { colors } = useTheme();
-  const { me } = useApp();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [loading, setLoading] = useState(true);
 
   useFocusEffect(useCallback(() => {
-    api.get(`/conversations?user_id=${me.id}`).then(setConversations).catch(() => {}).finally(() => setLoading(false));
-  }, [me.id]));
+    api.get(`/conversations`).then(setConversations).catch(() => {}).finally(() => setLoading(false));
+  }, []));
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg, paddingTop: insets.top + 12 }}>

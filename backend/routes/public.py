@@ -1,8 +1,9 @@
 import re
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
+from auth import get_current_user, get_optional_user
 from database import db, new_id, now
 from models import (BlockCreate, FavoriteToggle, MessageCreate, OrderCreate,
                     ProfileUpdate, ProposalCreate, ReportCreate, ReviewCreate)
@@ -31,7 +32,7 @@ def user_level(user: dict) -> str:
 def public_user(user: Optional[dict]) -> Optional[dict]:
     if not user:
         return None
-    return {k: user.get(k) for k in ("id", "name", "initials", "bio", "rating", "rating_count", "jobs_done", "city_id", "neighborhood_id", "verified_email", "verified_phone", "verified_identity", "member_since", "is_admin")} | {"level": user_level(user)}
+    return {k: user.get(k) for k in ("id", "name", "initials", "bio", "rating", "rating_count", "jobs_done", "city_id", "neighborhood_id", "preference", "verified_email", "verified_phone", "verified_identity", "member_since", "is_admin")} | {"level": user_level(user)}
 
 
 async def ref_maps():
@@ -132,7 +133,9 @@ async def get_user(user_id: str):
 
 
 @router.patch("/users/{user_id}")
-async def update_user(user_id: str, body: ProfileUpdate):
+async def update_user(user_id: str, body: ProfileUpdate, current=Depends(get_current_user)):
+    if current["id"] != user_id and not current.get("is_admin"):
+        raise HTTPException(403, "Você só pode editar o seu próprio perfil")
     data = {k: v for k, v in body.model_dump().items() if v is not None}
     if data:
         await db.users.update_one({"id": user_id}, {"$set": data})
@@ -154,7 +157,8 @@ async def list_orders(city_id: Optional[str] = None, category_id: Optional[str] 
                       neighborhood_id: Optional[str] = None, type: Optional[str] = None,
                       q: Optional[str] = None, status: Optional[str] = None,
                       client_id: Optional[str] = None, worker_id: Optional[str] = None,
-                      max_budget: Optional[float] = None, limit: int = 60):
+                      max_budget: Optional[float] = None, limit: int = 60,
+                      current: Optional[dict] = Depends(get_optional_user)):
     query: dict = {}
     if city_id:
         query["city_id"] = city_id
@@ -168,10 +172,15 @@ async def list_orders(city_id: Optional[str] = None, category_id: Optional[str] 
         query["status"] = {"$in": status.split(",")}
     elif not client_id and not worker_id:
         query["status"] = "published"
+    # client_id/worker_id are "my activity" filters — always pinned to the caller's own id, never trusted from the query string.
     if client_id:
-        query["client_id"] = client_id
+        if not current:
+            raise HTTPException(401, "É preciso estar conectado.")
+        query["client_id"] = current["id"]
     if worker_id:
-        query["worker_id"] = worker_id
+        if not current:
+            raise HTTPException(401, "É preciso estar conectado.")
+        query["worker_id"] = current["id"]
     if max_budget:
         query["budget"] = {"$lte": max_budget}
     if q:
@@ -190,9 +199,9 @@ async def list_orders(city_id: Optional[str] = None, category_id: Optional[str] 
 
 
 @router.post("/orders")
-async def create_order(body: OrderCreate):
+async def create_order(body: OrderCreate, current=Depends(get_current_user)):
     order = body.model_dump()
-    order.update({"id": new_id(), "status": "published", "worker_id": None,
+    order.update({"id": new_id(), "status": "published", "worker_id": None, "client_id": current["id"],
                   "reviewed_by_client": False, "reviewed_by_worker": False,
                   "is_demo": False, "created_at": now()})
     await db.orders.insert_one(dict(order))
@@ -208,11 +217,11 @@ async def get_order(order_id: str):
 
 
 @router.post("/orders/{order_id}/start")
-async def start_order(order_id: str, user_id: str):
+async def start_order(order_id: str, current=Depends(get_current_user)):
     order = await db.orders.find_one({"id": order_id})
     if not order:
         raise HTTPException(404, "Pedido não encontrado")
-    if user_id not in (order.get("worker_id"), order["client_id"]):
+    if current["id"] not in (order.get("worker_id"), order["client_id"]):
         raise HTTPException(403, "Você não participa deste pedido")
     await db.orders.update_one({"id": order_id}, {"$set": {"status": "in_progress", "started_at": now()}})
     await system_message(order_id, "O serviço está em andamento.")
@@ -221,11 +230,11 @@ async def start_order(order_id: str, user_id: str):
 
 
 @router.post("/orders/{order_id}/complete")
-async def complete_order(order_id: str, user_id: str):
+async def complete_order(order_id: str, current=Depends(get_current_user)):
     order = await db.orders.find_one({"id": order_id})
     if not order:
         raise HTTPException(404, "Pedido não encontrado")
-    if user_id != order["client_id"]:
+    if current["id"] != order["client_id"]:
         raise HTTPException(403, "Apenas quem pediu pode concluir")
     await db.orders.update_one({"id": order_id}, {"$set": {"status": "completed", "completed_at": now()}})
     if order.get("worker_id"):
@@ -236,11 +245,11 @@ async def complete_order(order_id: str, user_id: str):
 
 
 @router.post("/orders/{order_id}/cancel")
-async def cancel_order(order_id: str, user_id: str):
+async def cancel_order(order_id: str, current=Depends(get_current_user)):
     order = await db.orders.find_one({"id": order_id})
     if not order:
         raise HTTPException(404, "Pedido não encontrado")
-    if user_id != order["client_id"]:
+    if current["id"] != order["client_id"]:
         raise HTTPException(403, "Apenas quem pediu pode cancelar")
     await db.orders.update_one({"id": order_id}, {"$set": {"status": "cancelled", "cancelled_at": now()}})
     return {"ok": True, "status": "cancelled"}
@@ -257,29 +266,29 @@ async def order_proposals(order_id: str):
 
 
 @router.post("/orders/{order_id}/proposals")
-async def create_proposal(order_id: str, body: ProposalCreate):
+async def create_proposal(order_id: str, body: ProposalCreate, current=Depends(get_current_user)):
     order = await db.orders.find_one({"id": order_id})
     if not order:
         raise HTTPException(404, "Pedido não encontrado")
     if order["status"] != "published":
         raise HTTPException(400, "Este pedido não está mais recebendo propostas")
-    if order["client_id"] == body.worker_id:
+    if order["client_id"] == current["id"]:
         raise HTTPException(400, "Você não pode enviar proposta para o próprio pedido")
-    if await db.proposals.find_one({"order_id": order_id, "worker_id": body.worker_id}):
+    if await db.proposals.find_one({"order_id": order_id, "worker_id": current["id"]}):
         raise HTTPException(400, "Você já enviou uma proposta para este pedido")
-    proposal = body.model_dump() | {"id": new_id(), "order_id": order_id, "status": "pending", "created_at": now()}
+    proposal = body.model_dump() | {"id": new_id(), "order_id": order_id, "worker_id": current["id"], "status": "pending", "created_at": now()}
     await db.proposals.insert_one(dict(proposal))
     await notify(order["client_id"], "Nova proposta", f"Você recebeu uma proposta em “{order['title']}”.", "proposal", order_id)
     return proposal
 
 
 @router.post("/proposals/{proposal_id}/accept")
-async def accept_proposal(proposal_id: str, user_id: str):
+async def accept_proposal(proposal_id: str, current=Depends(get_current_user)):
     proposal = await db.proposals.find_one({"id": proposal_id}, {"_id": 0})
     if not proposal:
         raise HTTPException(404, "Proposta não encontrada")
     order = await db.orders.find_one({"id": proposal["order_id"]})
-    if not order or order["client_id"] != user_id:
+    if not order or order["client_id"] != current["id"]:
         raise HTTPException(403, "Apenas quem pediu pode aceitar propostas")
     await db.proposals.update_many({"order_id": proposal["order_id"], "id": {"$ne": proposal_id}}, {"$set": {"status": "rejected"}})
     await db.proposals.update_one({"id": proposal_id}, {"$set": {"status": "accepted"}})
@@ -292,29 +301,33 @@ async def accept_proposal(proposal_id: str, user_id: str):
 # ---------- chat ----------
 
 @router.get("/orders/{order_id}/messages")
-async def order_messages(order_id: str):
+async def order_messages(order_id: str, current=Depends(get_current_user)):
+    order = await db.orders.find_one({"id": order_id})
+    if not order or current["id"] not in (order["client_id"], order.get("worker_id")):
+        raise HTTPException(403, "Você não participa desta conversa")
     return await db.messages.find({"order_id": order_id}, {"_id": 0}).sort("created_at", 1).to_list(200)
 
 
 @router.post("/orders/{order_id}/messages")
-async def send_message(order_id: str, body: MessageCreate):
+async def send_message(order_id: str, body: MessageCreate, current=Depends(get_current_user)):
     order = await db.orders.find_one({"id": order_id})
     if not order:
         raise HTTPException(404, "Pedido não encontrado")
-    if body.sender_id not in (order["client_id"], order.get("worker_id")):
+    if current["id"] not in (order["client_id"], order.get("worker_id")):
         raise HTTPException(403, "Você não participa desta conversa")
-    message = {"id": new_id(), "order_id": order_id, "sender_id": body.sender_id,
+    message = {"id": new_id(), "order_id": order_id, "sender_id": current["id"],
                "type": "image" if body.image_b64 else "text", "text": body.text,
                "image_b64": body.image_b64, "created_at": now()}
     await db.messages.insert_one(dict(message))
-    other = order["client_id"] if body.sender_id != order["client_id"] else order.get("worker_id")
+    other = order["client_id"] if current["id"] != order["client_id"] else order.get("worker_id")
     if other:
         await notify(other, "Nova mensagem", body.text[:80] or "Enviou uma imagem", "message", order_id)
     return message
 
 
 @router.get("/conversations")
-async def conversations(user_id: str):
+async def conversations(current=Depends(get_current_user)):
+    user_id = current["id"]
     query = {"$or": [{"client_id": user_id}, {"worker_id": user_id}], "status": {"$in": ["accepted", "in_progress", "completed"]}, "worker_id": {"$ne": None}}
     orders = await db.orders.find(query, {"_id": 0}).sort("created_at", -1).to_list(50)
     enriched = await enrich_orders(orders)
@@ -329,18 +342,18 @@ async def conversations(user_id: str):
 # ---------- reviews ----------
 
 @router.post("/reviews")
-async def create_review(body: ReviewCreate):
+async def create_review(body: ReviewCreate, current=Depends(get_current_user)):
     order = await db.orders.find_one({"id": body.order_id})
     if not order:
         raise HTTPException(404, "Pedido não encontrado")
     if order["status"] != "completed":
         raise HTTPException(400, "Avalie apenas após a conclusão")
-    if body.from_id not in (order["client_id"], order.get("worker_id")):
+    if current["id"] not in (order["client_id"], order.get("worker_id")):
         raise HTTPException(403, "Você não participa deste pedido")
-    flag = "reviewed_by_client" if body.from_id == order["client_id"] else "reviewed_by_worker"
+    flag = "reviewed_by_client" if current["id"] == order["client_id"] else "reviewed_by_worker"
     if order.get(flag):
         raise HTTPException(400, "Você já avaliou este pedido")
-    review = body.model_dump() | {"id": new_id(), "created_at": now()}
+    review = body.model_dump() | {"id": new_id(), "from_id": current["id"], "created_at": now()}
     await db.reviews.insert_one(dict(review))
     await db.orders.update_one({"id": body.order_id}, {"$set": {flag: True}})
     target = await db.users.find_one({"id": body.to_id})
@@ -355,34 +368,34 @@ async def create_review(body: ReviewCreate):
 # ---------- trust & safety ----------
 
 @router.post("/reports")
-async def create_report(body: ReportCreate):
-    report = body.model_dump() | {"id": new_id(), "status": "open", "created_at": now()}
+async def create_report(body: ReportCreate, current=Depends(get_current_user)):
+    report = body.model_dump() | {"id": new_id(), "reporter_id": current["id"], "status": "open", "created_at": now()}
     await db.reports.insert_one(dict(report))
     return report
 
 
 @router.post("/blocks")
-async def create_block(body: BlockCreate):
-    if not await db.blocks.find_one({"user_id": body.user_id, "blocked_user_id": body.blocked_user_id}):
-        await db.blocks.insert_one(body.model_dump() | {"id": new_id(), "created_at": now()})
+async def create_block(body: BlockCreate, current=Depends(get_current_user)):
+    if not await db.blocks.find_one({"user_id": current["id"], "blocked_user_id": body.blocked_user_id}):
+        await db.blocks.insert_one(body.model_dump() | {"id": new_id(), "user_id": current["id"], "created_at": now()})
     return {"ok": True}
 
 
 # ---------- favorites ----------
 
 @router.post("/favorites/toggle")
-async def toggle_favorite(body: FavoriteToggle):
-    existing = await db.favorites.find_one({"user_id": body.user_id, "order_id": body.order_id})
+async def toggle_favorite(body: FavoriteToggle, current=Depends(get_current_user)):
+    existing = await db.favorites.find_one({"user_id": current["id"], "order_id": body.order_id})
     if existing:
         await db.favorites.delete_one({"_id": existing["_id"]})
         return {"favorited": False}
-    await db.favorites.insert_one(body.model_dump() | {"id": new_id(), "created_at": now()})
+    await db.favorites.insert_one(body.model_dump() | {"id": new_id(), "user_id": current["id"], "created_at": now()})
     return {"favorited": True}
 
 
 @router.get("/favorites")
-async def list_favorites(user_id: str):
-    favs = await db.favorites.find({"user_id": user_id}, {"_id": 0}).to_list(100)
+async def list_favorites(current=Depends(get_current_user)):
+    favs = await db.favorites.find({"user_id": current["id"]}, {"_id": 0}).to_list(100)
     order_ids = [f["order_id"] for f in favs]
     orders = await db.orders.find({"id": {"$in": order_ids}}, {"_id": 0}).to_list(100)
     return {"order_ids": order_ids, "orders": await enrich_orders(orders)}
@@ -391,13 +404,13 @@ async def list_favorites(user_id: str):
 # ---------- notifications ----------
 
 @router.get("/notifications")
-async def list_notifications(user_id: str):
-    items = await db.notifications.find({"user_id": user_id}, {"_id": 0}).sort("created_at", -1).to_list(50)
-    unread = await db.notifications.count_documents({"user_id": user_id, "read": False})
+async def list_notifications(current=Depends(get_current_user)):
+    items = await db.notifications.find({"user_id": current["id"]}, {"_id": 0}).sort("created_at", -1).to_list(50)
+    unread = await db.notifications.count_documents({"user_id": current["id"], "read": False})
     return {"items": items, "unread": unread}
 
 
 @router.post("/notifications/read")
-async def read_notifications(user_id: str):
-    await db.notifications.update_many({"user_id": user_id}, {"$set": {"read": True}})
+async def read_notifications(current=Depends(get_current_user)):
+    await db.notifications.update_many({"user_id": current["id"]}, {"$set": {"read": True}})
     return {"ok": True}

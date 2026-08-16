@@ -1,6 +1,47 @@
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, EmailStr, Field
+
+
+class RegisterIn(BaseModel):
+    name: str
+    email: EmailStr
+    password: str = Field(min_length=8)
+    city_id: str
+    neighborhood_id: Optional[str] = None
+    preference: Optional[str] = None  # client | worker | both
+
+
+class LoginIn(BaseModel):
+    email: EmailStr
+    password: str
+
+
+class GoogleAuthIn(BaseModel):
+    id_token: str
+    city_id: str = "city-parauapebas"  # used only when this Google sign-in creates a brand-new account
+
+
+class ForgotPasswordIn(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordIn(BaseModel):
+    email: EmailStr
+    code: str
+    password: str = Field(min_length=8)
+
+
+class SendVerificationIn(BaseModel):
+    pass
+
+
+class VerifyEmailIn(BaseModel):
+    code: str
+
+
+class PreferenceIn(BaseModel):
+    preference: str  # client | worker | both
 
 
 class OrderCreate(BaseModel):
@@ -16,32 +57,27 @@ class OrderCreate(BaseModel):
     budget: float = 0
     photos: list[str] = []
     fields: dict = {}
-    client_id: str
 
 
 class ProposalCreate(BaseModel):
-    worker_id: str
     amount: float
     message: str = ""
     eta: str = ""
 
 
 class MessageCreate(BaseModel):
-    sender_id: str
     text: str = ""
     image_b64: Optional[str] = None
 
 
 class ReviewCreate(BaseModel):
     order_id: str
-    from_id: str
     to_id: str
     stars: int = Field(ge=1, le=5)
     comment: str = ""
 
 
 class ReportCreate(BaseModel):
-    reporter_id: str
     target_type: str  # user | order
     target_id: str
     reason: str
@@ -56,12 +92,10 @@ class ProfileUpdate(BaseModel):
 
 
 class BlockCreate(BaseModel):
-    user_id: str
     blocked_user_id: str
 
 
 class FavoriteToggle(BaseModel):
-    user_id: str
     order_id: str
 
 

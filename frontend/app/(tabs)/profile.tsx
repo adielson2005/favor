@@ -5,14 +5,16 @@ import { Alert, ScrollView, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { api } from "@/src/api";
+import { useAuth } from "@/src/auth";
 import { Avatar, Btn, Chip, Field, Row, Segmented, Sheet, Stars } from "@/src/components/ui";
+import { fonts } from "@/src/hooks/use-app-fonts";
 import { useApp } from "@/src/state";
 import { ThemePref, useTheme } from "@/src/theme";
-import { storage } from "@/src/utils/storage";
 
 export default function Profile() {
   const { colors, pref, setPref } = useTheme();
   const { me, mode, neighborhoods, city, refreshMe } = useApp();
+  const { logout } = useAuth();
   const router = useRouter();
   const insets = useSafeAreaInsets();
 
@@ -24,6 +26,8 @@ export default function Profile() {
   const [hood, setHood] = useState<string | null>(null);
   const [reportText, setReportText] = useState("");
   const [saving, setSaving] = useState(false);
+
+  if (!me) return null;
 
   const myHood = neighborhoods.find((n) => n.id === me.neighborhood_id);
   const memberSince = me.member_since ? new Date(me.member_since).getFullYear() : "2025";
@@ -51,16 +55,16 @@ export default function Profile() {
     if (!reportText.trim()) return;
     setSaving(true);
     try {
-      await api.post("/reports", { reporter_id: me.id, target_type: "user", target_id: "app", reason: "Problema no aplicativo", details: reportText });
+      await api.post("/reports", { target_type: "user", target_id: "app", reason: "Problema no aplicativo", details: reportText });
       setReportOpen(false);
       setReportText("");
       Alert.alert("Obrigado", "Recebemos o seu relato. Vamos analisar.");
     } catch { Alert.alert("Ops", "Não conseguimos enviar agora."); } finally { setSaving(false); }
   };
 
-  const logout = async () => {
-    await storage.removeItem("faze:onboarded");
-    router.replace("/onboarding");
+  const doLogout = async () => {
+    await logout();
+    router.replace("/auth/login");
   };
 
   return (
@@ -71,7 +75,7 @@ export default function Profile() {
           <Avatar name={me.name} initials={me.initials} size={68} />
           <View style={{ flex: 1, gap: 3 }}>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-              <Text style={{ color: colors.ink, fontSize: 20, fontWeight: "800" }}>{me.name}</Text>
+              <Text style={{ color: colors.ink, fontFamily: fonts.headingExtraBold, fontSize: 20 }}>{me.name}</Text>
               {me.verified_identity && <Ionicons name="checkmark-circle" size={17} color={colors.green} />}
             </View>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
@@ -132,8 +136,8 @@ export default function Profile() {
 
         <Section title="Ajuda">
           <Row testID="report-problem-row" icon="flag-outline" label="Denunciar problema" onPress={() => setReportOpen(true)} />
-          <Row testID="admin-row" icon="settings-outline" label="Administração" value="demo" onPress={() => router.push("/admin")} />
-          <Row testID="logout-row" icon="log-out-outline" label="Sair" danger onPress={logout} />
+          {me.is_admin && <Row testID="admin-row" icon="settings-outline" label="Administração" onPress={() => router.push("/admin")} />}
+          <Row testID="logout-row" icon="log-out-outline" label="Sair" danger onPress={doLogout} />
         </Section>
       </ScrollView>
 
@@ -172,7 +176,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   const { colors } = useTheme();
   return (
     <View style={{ marginTop: 26 }}>
-      <Text style={{ color: colors.faint, fontSize: 12, fontWeight: "800", textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 }}>{title}</Text>
+      <Text style={{ color: colors.faint, fontFamily: fonts.bodyBold, fontSize: 12, textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 }}>{title}</Text>
       <View>{children}</View>
     </View>
   );

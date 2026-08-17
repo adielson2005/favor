@@ -39,7 +39,7 @@ async def lifespan(app: FastAPI):
     client.close()
 
 
-app = FastAPI(title="FAZÊ API", lifespan=lifespan)
+app = FastAPI(title="fazum API", lifespan=lifespan)
 app.include_router(auth_router, prefix="/api")
 app.include_router(public_router, prefix="/api")
 app.include_router(admin_router, prefix="/api")

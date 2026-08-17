@@ -1,11 +1,11 @@
 {
   "expo": {
-    "name": "FAZÊ",
-    "slug": "faze",
+    "name": "fazum",
+    "slug": "fazum",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "faze",
+    "scheme": "fazum",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
@@ -19,7 +19,7 @@
       "permissions": ["android.permission.READ_MEDIA_IMAGES"],
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
-        "backgroundColor": "#000000"
+        "backgroundColor": "#091323"
       },
       "edgeToEdgeEnabled": true,
       "package": "com.emergent.fazefazedores.u932rg"
@@ -37,7 +37,7 @@
           "image": "./assets/images/splash-image.png",
           "imageWidth": 200,
           "resizeMode": "contain",
-          "backgroundColor": "#000000"
+          "backgroundColor": "#091323"
         }
       ]
     ],

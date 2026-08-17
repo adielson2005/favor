@@ -130,7 +130,7 @@ export default function OrderDetail() {
     try {
       await api.post("/reports", { target_type: "order", target_id: order.id, reason: reportReason, details: reportDetails });
       setReportOpen(false); setReportDetails("");
-      Alert.alert("Denúncia enviada", "Nossa equipe vai analisar. Obrigado por ajudar a manter o FAZÊ seguro.");
+      Alert.alert("Denúncia enviada", "Nossa equipe vai analisar. Obrigado por ajudar a manter o fazum seguro.");
     } catch { Alert.alert("Ops", "Não conseguimos enviar agora."); } finally { setSending(false); }
   };
 

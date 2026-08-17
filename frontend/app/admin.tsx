@@ -301,7 +301,7 @@ function CommissionConfig({ data, act }: { data: any; act: (fn: () => Promise<an
 
   return (
     <View style={{ gap: space.md }}>
-      <Field label="Comissão FAZÊ (%)" value={commission} onChangeText={setCommission} keyboardType="numeric" />
+      <Field label="Comissão fazum (%)" value={commission} onChangeText={setCommission} keyboardType="numeric" />
       <Field label="Saque mínimo (R$)" value={minWithdrawal} onChangeText={setMinWithdrawal} keyboardType="numeric" />
       <Field label="Limite de saque por dia (R$)" value={maxWithdrawalDay} onChangeText={setMaxWithdrawalDay} keyboardType="numeric" />
       <Field label="Limite de depósito por transação (R$)" value={maxDeposit} onChangeText={setMaxDeposit} keyboardType="numeric" />

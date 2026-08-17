@@ -13,9 +13,9 @@ import { radius, space, type, useTheme } from "@/src/theme";
 import { safeBack } from "@/src/utils/navigation";
 
 const DEMO_ACCOUNTS = [
-  { label: "Cliente", email: "marina@faze.demo" },
-  { label: "Fazedor", email: "joao@faze.demo" },
-  { label: "Admin", email: "admin@faze.demo" },
+  { label: "Cliente", email: "marina@fazum.demo" },
+  { label: "Fazedor", email: "joao@fazum.demo" },
+  { label: "Admin", email: "admin@fazum.demo" },
 ];
 const DEMO_PASSWORD = "faze2024";
 

@@ -78,7 +78,7 @@ async def create_deposit(body: DepositIn, current=Depends(get_current_user), ide
         deposit["idempotency_key"] = idempotency_key
     provider = get_payment_provider()
     try:
-        result = await provider.create_pix_charge(to_cents(body.amount), reference=deposit["id"], description="Depósito FAZÊ")
+        result = await provider.create_pix_charge(to_cents(body.amount), reference=deposit["id"], description="Depósito fazum")
         deposit["status"] = "PROCESSING"
         deposit["provider"] = provider.name
         deposit["provider_transaction_id"] = result.get("id")

@@ -17,7 +17,7 @@ BASE_URL = (dotenv_values('/app/frontend/.env').get('EXPO_PUBLIC_BACKEND_URL')
             or os.environ.get('EXPO_PUBLIC_BACKEND_URL')).rstrip('/')
 API = f"{BASE_URL}/api"
 
-ADMIN_EMAIL = "admin@faze.demo"
+ADMIN_EMAIL = "admin@fazum.demo"
 DEMO_PASSWORD = "faze2024"
 TEST_PASSWORD = "TestPass123!"
 

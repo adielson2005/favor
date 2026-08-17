@@ -163,7 +163,7 @@ export default function Signup() {
         </Animated.View>
         <Animated.View entering={FadeIn.duration(300).delay(150)} style={{ alignItems: "center", gap: space.xs }}>
           <Text style={{ color: colors.ink, ...type.h1, textAlign: "center" }}>Pronto, {createdName}.</Text>
-          <Text style={{ color: colors.muted, ...type.body, textAlign: "center" }}>Seu FAZÊ está pronto.</Text>
+          <Text style={{ color: colors.muted, ...type.body, textAlign: "center" }}>Seu fazum está pronto.</Text>
         </Animated.View>
       </View>
     );
@@ -289,7 +289,7 @@ export default function Signup() {
 
           {stepKey === "preferencia" && (
             <Animated.View entering={FadeInDown.duration(220)}>
-              <Text style={label}>O que você quer fazer no FAZÊ?</Text>
+              <Text style={label}>O que você quer fazer no fazum?</Text>
               <Text style={hint}>Isso só personaliza sua primeira experiência — você pode fazer os dois a qualquer momento.</Text>
               <View style={{ gap: space.md }}>
                 {PREFERENCES.map((p) => {

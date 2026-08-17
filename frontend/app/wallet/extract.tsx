@@ -89,7 +89,7 @@ export default function Extract() {
             <DetailRow label="Valor" value={`R$ ${selected.amount.toFixed(2).replace(".", ",")}`} />
             <DetailRow label="Data" value={new Date(selected.created_at).toLocaleString("pt-BR")} />
             <DetailRow label="Status" value={STATUS_LABELS[selected.status] || selected.status} />
-            <DetailRow label="Método" value={selected.provider || "Carteira FAZÊ"} />
+            <DetailRow label="Método" value={selected.provider || "Carteira fazum"} />
             <DetailRow label="ID da transação" value={selected.id} mono />
           </View>
         )}

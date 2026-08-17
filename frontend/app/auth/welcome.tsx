@@ -20,7 +20,7 @@ export default function Welcome() {
         <Animated.View entering={FadeIn.duration(400)} style={{ alignItems: "center", gap: space.lg }}>
           <Brand size={52} />
           <Text style={{ color: colors.muted, ...type.body, textAlign: "center", maxWidth: 280 }}>
-            Ajuda quando você precisa.{"\n"}Oportunidades quando você quer.
+            Precisou? <Text style={{ color: colors.primary, fontFamily: fonts.bodyBold }}>FAZUM</Text> pedido.
           </Text>
         </Animated.View>
 

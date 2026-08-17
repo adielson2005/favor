@@ -1,4 +1,4 @@
-"""FAZÊ backend regression tests (iteration 6 — real auth).
+"""fazum backend regression tests (iteration 6 — real auth).
 
 Covers bootstrap, geo/catalog, orders (filters + CRUD), proposals lifecycle,
 chat, favorites, reports, notifications, and admin endpoints (positive + 401/403),
@@ -17,9 +17,9 @@ BASE_URL = (dotenv_values('/app/frontend/.env').get('EXPO_PUBLIC_BACKEND_URL')
 CLIENT_ID = "demo-client"
 WORKER_ID = "demo-worker"
 ADMIN_ID = "demo-admin"
-CLIENT_EMAIL = "marina@faze.demo"
-WORKER_EMAIL = "joao@faze.demo"
-ADMIN_EMAIL = "admin@faze.demo"
+CLIENT_EMAIL = "marina@fazum.demo"
+WORKER_EMAIL = "joao@fazum.demo"
+ADMIN_EMAIL = "admin@fazum.demo"
 DEMO_PASSWORD = "faze2024"
 
 TAG = f"TEST_{uuid.uuid4().hex[:6]}"
@@ -65,7 +65,7 @@ def test_login_wrong_password_rejected(api):
 
 
 def test_register_and_me(api):
-    email = f"{TAG.lower()}@faze.demo"
+    email = f"{TAG.lower()}@fazum.demo"
     r = api.post(f"{BASE_URL}/api/auth/register", json={
         "name": "Teste Regressão", "email": email, "password": "senha1234", "city_id": "city-parauapebas",
     }, timeout=10)

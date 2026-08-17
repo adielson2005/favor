@@ -58,7 +58,7 @@ export default function Deposit() {
             </View>
             <Text style={{ color: colors.ink, ...type.h1, textAlign: "center" }}>Depósito ainda não disponível</Text>
             <Text style={{ color: colors.muted, ...type.body, textAlign: "center" }}>
-              Estamos preparando o pagamento por Pix. Por enquanto, fale com a equipe FAZÊ se precisar de saldo de teste.
+              Estamos preparando o pagamento por Pix. Por enquanto, fale com a equipe fazum se precisar de saldo de teste.
             </Text>
             <Btn title="Voltar" variant="secondary" onPress={() => router.back()} />
           </Animated.View>

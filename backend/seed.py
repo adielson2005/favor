@@ -1,4 +1,4 @@
-"""Idempotent demo/reference data seeding for FAZÊ."""
+"""Idempotent demo/reference data seeding for fazum."""
 from auth import hash_password
 from database import db, now
 
@@ -40,11 +40,11 @@ CATEGORIES = [
 ]
 
 USERS = [
-    {"id": "demo-client", "name": "Marina Alves", "email": "marina@faze.demo", "initials": "MA", "bio": "Moro em Parauapebas e uso o FAZÊ para o dia a dia.", "rating": 4.9, "rating_count": 11, "jobs_done": 12, "neighborhood": "Cidade Nova", "verified_email": True, "verified_phone": True, "verified_identity": True, "is_admin": False},
-    {"id": "demo-worker", "name": "João Ribeiro", "email": "joao@faze.demo", "initials": "JR", "bio": "Faço entregas, montagens e pequenos serviços. Rápido e de confiança.", "rating": 4.9, "rating_count": 78, "jobs_done": 86, "neighborhood": "União", "verified_email": True, "verified_phone": True, "verified_identity": True, "is_admin": False},
-    {"id": "worker-ana", "name": "Ana Souza", "email": "ana@faze.demo", "initials": "AS", "bio": "Compras, pets e organização. Capricho em tudo.", "rating": 4.8, "rating_count": 39, "jobs_done": 42, "neighborhood": "Rio Verde", "verified_email": True, "verified_phone": True, "verified_identity": True, "is_admin": False},
-    {"id": "worker-pedro", "name": "Pedro Lima", "email": "pedro@faze.demo", "initials": "PL", "bio": "Técnico em informática. Configuro computadores e redes.", "rating": 4.7, "rating_count": 17, "jobs_done": 19, "neighborhood": "Beira Rio", "verified_email": True, "verified_phone": False, "verified_identity": False, "is_admin": False},
-    {"id": "demo-admin", "name": "Equipe FAZÊ", "email": "admin@faze.demo", "initials": "FZ", "bio": "Administração da plataforma.", "rating": 5.0, "rating_count": 0, "jobs_done": 0, "neighborhood": "Cidade Nova", "verified_email": True, "verified_phone": True, "verified_identity": True, "is_admin": True},
+    {"id": "demo-client", "name": "Marina Alves", "email": "marina@fazum.demo", "initials": "MA", "bio": "Moro em Parauapebas e uso o fazum para o dia a dia.", "rating": 4.9, "rating_count": 11, "jobs_done": 12, "neighborhood": "Cidade Nova", "verified_email": True, "verified_phone": True, "verified_identity": True, "is_admin": False},
+    {"id": "demo-worker", "name": "João Ribeiro", "email": "joao@fazum.demo", "initials": "JR", "bio": "Faço entregas, montagens e pequenos serviços. Rápido e de confiança.", "rating": 4.9, "rating_count": 78, "jobs_done": 86, "neighborhood": "União", "verified_email": True, "verified_phone": True, "verified_identity": True, "is_admin": False},
+    {"id": "worker-ana", "name": "Ana Souza", "email": "ana@fazum.demo", "initials": "AS", "bio": "Compras, pets e organização. Capricho em tudo.", "rating": 4.8, "rating_count": 39, "jobs_done": 42, "neighborhood": "Rio Verde", "verified_email": True, "verified_phone": True, "verified_identity": True, "is_admin": False},
+    {"id": "worker-pedro", "name": "Pedro Lima", "email": "pedro@fazum.demo", "initials": "PL", "bio": "Técnico em informática. Configuro computadores e redes.", "rating": 4.7, "rating_count": 17, "jobs_done": 19, "neighborhood": "Beira Rio", "verified_email": True, "verified_phone": False, "verified_identity": False, "is_admin": False},
+    {"id": "demo-admin", "name": "Equipe fazum", "email": "admin@fazum.demo", "initials": "FZ", "bio": "Administração da plataforma.", "rating": 5.0, "rating_count": 0, "jobs_done": 0, "neighborhood": "Cidade Nova", "verified_email": True, "verified_phone": True, "verified_identity": True, "is_admin": True},
 ]
 
 ORDERS = [
@@ -109,13 +109,23 @@ async def ensure_seed():
                 "member_since": "2025-08-01T00:00:00+00:00", "is_demo": True, "created_at": now(),
             })
             await db.users.insert_one(dict(user))
-        elif not existing.get("password_hash") or not existing.get("email") or not existing.get("preference"):
-            # Backfill credentials/preference on accounts seeded before these fields existed — never touches user-generated content.
-            await db.users.update_one({"id": user["id"]}, {"$set": {
-                "email": existing.get("email") or user["email"],
-                "password_hash": existing.get("password_hash") or hash_password(DEMO_PASSWORD),
-                "preference": existing.get("preference") or "both",
-            }})
+        else:
+            updates = {}
+            if not existing.get("password_hash"):
+                updates["password_hash"] = hash_password(DEMO_PASSWORD)
+            if not existing.get("preference"):
+                updates["preference"] = "both"
+            # These accounts only ever carry demo data (never real user content), so
+            # rename-in-place is safe: move a still-on-the-old-domain demo account to
+            # its new address/name rather than leaving it permanently stale.
+            if not existing.get("email") or existing.get("email", "").endswith("@faze.demo"):
+                updates["email"] = user["email"]
+            if existing.get("is_demo") and existing.get("name") == "Equipe FAZÊ":
+                updates["name"] = user["name"]
+            if existing.get("is_demo") and existing.get("bio") == "Moro em Parauapebas e uso o FAZÊ para o dia a dia.":
+                updates["bio"] = user["bio"]
+            if updates:
+                await db.users.update_one({"id": user["id"]}, {"$set": updates})
 
     if await db.orders.count_documents({}) == 0:
         for order in ORDERS:

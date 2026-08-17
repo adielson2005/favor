@@ -43,7 +43,7 @@ async def check_withdrawal_risk(user: dict, amount_cents: int, bank_account: dic
 
 
 async def check_payment_risk(user: dict, amount_cents: int) -> str:
-    if amount_cents >= 500_000:  # R$5000 — well above typical FAZÊ order sizes
+    if amount_cents >= 500_000:  # R$5000 — well above typical fazum order sizes
         return REVIEW_REQUIRED
     if amount_cents >= 100_000:
         return MEDIUM

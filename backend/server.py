@@ -35,6 +35,13 @@ async def lifespan(app: FastAPI):
     await db.payments.create_index("order_id", unique=True)
     await db.disputes.create_index("order_id")
     await db.payment_events.create_index("event_id", unique=True)
+    await db.orders.create_index("worker_id")
+    await db.proposals.create_index("worker_id")
+    await db.favorites.create_index([("user_id", 1), ("order_id", 1)])
+    await db.reports.create_index([("target_type", 1), ("target_id", 1)])
+    await db.blocks.create_index("user_id")
+    await db.risk_flags.create_index([("status", 1), ("created_at", -1)])
+    await db.security_events.create_index([("user_id", 1), ("created_at", -1)])
     yield
     client.close()
 
@@ -44,4 +51,19 @@ app.include_router(auth_router, prefix="/api")
 app.include_router(public_router, prefix="/api")
 app.include_router(admin_router, prefix="/api")
 app.include_router(wallet_router, prefix="/api")
-app.add_middleware(CORSMiddleware, allow_credentials=True, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+
+@app.middleware("http")
+async def security_headers(request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+    return response
+
+
+# The app authenticates with a Bearer token (Authorization header), never cookies, so
+# CORS "credentials" mode is never actually used — allow_credentials=True combined with
+# a wildcard origin is both unnecessary and a spec-invalid combination browsers reject.
+app.add_middleware(CORSMiddleware, allow_credentials=False, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])

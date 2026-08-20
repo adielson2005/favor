@@ -33,6 +33,12 @@ export const OrderCard = React.memo(function OrderCard({ order, onPress, showSta
           <Text style={{ color: colors.green, fontFamily: fonts.headingBold, fontSize: 15 }}>R$ {order.budget}</Text>
         </View>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          {order.urgent && (
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 3, backgroundColor: colors.dangerSoft, borderRadius: 8, paddingHorizontal: 7, height: 20 }}>
+              <Ionicons name="flash" size={11} color={colors.danger} />
+              <Text style={{ color: colors.danger, fontFamily: fonts.bodyBold, fontSize: 11 }}>Urgente</Text>
+            </View>
+          )}
           <Meta icon="location-outline" text={order.neighborhood || order.city || ""} />
           <Meta icon="time-outline" text={`${order.date_label}${order.time_label ? ` · ${order.time_label}` : ""}`} />
           <View style={{ flex: 1 }} />

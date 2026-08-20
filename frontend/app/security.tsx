@@ -1,15 +1,18 @@
 import { Ionicons } from "@expo/vector-icons";
-import { useRouter } from "expo-router";
-import React from "react";
-import { Pressable, ScrollView, Text, View } from "react-native";
+import { useFocusEffect, useRouter } from "expo-router";
+import React, { useCallback, useState } from "react";
+import { Alert, Pressable, ScrollView, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { api } from "@/src/api";
 import { useApp } from "@/src/state";
-import { Row } from "@/src/components/ui";
+import { Avatar, Row } from "@/src/components/ui";
 import { fonts } from "@/src/hooks/use-app-fonts";
 import { useRequireAuth } from "@/src/hooks/use-require-auth";
 import { radius, space, useTheme } from "@/src/theme";
 import { safeBack } from "@/src/utils/navigation";
+
+type Block = { blocked_user_id: string; user: { id: string; name: string; initials: string; avatar_b64?: string | null } | null };
 
 export default function Security() {
   const { colors } = useTheme();
@@ -17,6 +20,16 @@ export default function Security() {
   const insets = useSafeAreaInsets();
   const { me } = useApp();
   useRequireAuth();
+
+  const [blocks, setBlocks] = useState<Block[]>([]);
+  useFocusEffect(useCallback(() => { api.get("/blocks").then(setBlocks).catch(() => {}); }, []));
+
+  const unblock = (userId: string) => {
+    Alert.alert("Desbloquear usuário", "Vocês voltam a poder se contatar. Continuar?", [
+      { text: "Cancelar", style: "cancel" },
+      { text: "Desbloquear", onPress: async () => { try { await api.del(`/blocks/${userId}`); setBlocks((b) => b.filter((x) => x.blocked_user_id !== userId)); } catch { Alert.alert("Ops", "Não conseguimos desbloquear agora."); } } },
+    ]);
+  };
 
   if (!me) return null;
 
@@ -56,6 +69,28 @@ export default function Security() {
             <Divider />
             <Row testID="security-extract-row" icon="receipt-outline" label="Atividade da carteira" onPress={() => router.push("/wallet/extract")} />
           </View>
+        </View>
+
+        <View>
+          <SectionTitle title="Usuários bloqueados" />
+          {blocks.length === 0 ? (
+            <Text style={{ color: colors.faint, fontSize: 13 }}>Você não bloqueou ninguém.</Text>
+          ) : (
+            <View style={{ backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, overflow: "hidden" }}>
+              {blocks.map((b, i) => (
+                <View key={b.blocked_user_id}>
+                  {i > 0 && <Divider />}
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: space.md, paddingHorizontal: space.lg, height: 60 }}>
+                    <Avatar name={b.user?.name} initials={b.user?.initials} size={36} photo={b.user?.avatar_b64} />
+                    <Text style={{ flex: 1, color: colors.ink, fontFamily: fonts.bodySemiBold, fontSize: 14 }}>{b.user?.name || "Usuário"}</Text>
+                    <Pressable testID="unblock-user-button" onPress={() => unblock(b.blocked_user_id)} hitSlop={8}>
+                      <Text style={{ color: colors.primary, fontFamily: fonts.bodyBold, fontSize: 13 }}>Desbloquear</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              ))}
+            </View>
+          )}
         </View>
       </ScrollView>
     </View>

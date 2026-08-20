@@ -7,11 +7,12 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
 from auth import get_current_admin, get_current_user, rate_limit, verify_password
 from database import db, new_id, now
-from fraud import check_withdrawal_risk
+from fraud import check_withdrawal_risk, create_risk_flag
 from models import (
     BankAccountIn, BankAccountRemoveIn, DepositIn, DisputeIn, WithdrawalIn,
 )
 from payments import PaymentProviderError, get_payment_provider
+from security_events import log_security_event
 from wallet import (
     InsufficientFundsError, credit_wallet, debit_wallet, get_commission_config,
     get_or_create_wallet, move_bucket, to_cents, to_reais, transaction_public, wallet_public,
@@ -107,7 +108,7 @@ async def list_bank_accounts(current=Depends(get_current_user)):
 
 
 @router.post("/bank-accounts")
-async def add_bank_account(body: BankAccountIn, current=Depends(get_current_user)):
+async def add_bank_account(body: BankAccountIn, request: Request, current=Depends(get_current_user)):
     rate_limit(f"add-bank-account:{current['id']}", max_attempts=10, window_seconds=3600)
     if not verify_password(body.password, current.get("password_hash") or ""):
         raise HTTPException(401, "Senha incorreta.")
@@ -121,6 +122,7 @@ async def add_bank_account(body: BankAccountIn, current=Depends(get_current_user
         "is_primary": existing_count == 0, "active": True, "created_at": now(),
     }
     await db.bank_accounts.insert_one(dict(account))
+    await log_security_event(current["id"], "bank_account_added", detail=account["id"], ip=request.client.host if request.client else None)
     await db.notifications.insert_one({
         "id": new_id(), "user_id": current["id"], "title": "Conta bancária adicionada",
         "body": f"Uma conta terminada em {account['account_number'][-4:]} foi adicionada para saques.",
@@ -131,6 +133,7 @@ async def add_bank_account(body: BankAccountIn, current=Depends(get_current_user
 
 @router.patch("/bank-accounts/{account_id}/primary")
 async def set_primary_bank_account(account_id: str, current=Depends(get_current_user)):
+    rate_limit(f"set-primary-bank-account:{current['id']}", max_attempts=20, window_seconds=3600)
     account = await db.bank_accounts.find_one({"id": account_id, "user_id": current["id"], "active": True})
     if not account:
         raise HTTPException(404, "Conta não encontrada.")
@@ -140,20 +143,22 @@ async def set_primary_bank_account(account_id: str, current=Depends(get_current_
 
 
 @router.delete("/bank-accounts/{account_id}")
-async def remove_bank_account(account_id: str, body: BankAccountRemoveIn, current=Depends(get_current_user)):
+async def remove_bank_account(account_id: str, body: BankAccountRemoveIn, request: Request, current=Depends(get_current_user)):
+    rate_limit(f"remove-bank-account:{current['id']}", max_attempts=10, window_seconds=3600)
     if not verify_password(body.password, current.get("password_hash") or ""):
         raise HTTPException(401, "Senha incorreta.")
     account = await db.bank_accounts.find_one({"id": account_id, "user_id": current["id"]})
     if not account:
         raise HTTPException(404, "Conta não encontrada.")
     await db.bank_accounts.update_one({"id": account_id}, {"$set": {"active": False}})
+    await log_security_event(current["id"], "bank_account_removed", detail=account_id, ip=request.client.host if request.client else None)
     return {"ok": True}
 
 
 # ---------- withdrawals ----------
 
 @router.post("/wallet/withdrawals")
-async def create_withdrawal(body: WithdrawalIn, current=Depends(get_current_user), idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key")):
+async def create_withdrawal(body: WithdrawalIn, request: Request, current=Depends(get_current_user), idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key")):
     rate_limit(f"withdrawal:{current['id']}", max_attempts=10, window_seconds=600)
     if not verify_password(body.password, current.get("password_hash") or ""):
         raise HTTPException(401, "Senha incorreta.")
@@ -169,9 +174,17 @@ async def create_withdrawal(body: WithdrawalIn, current=Depends(get_current_user
             return existing
 
     amount_cents = to_cents(body.amount)
-    risk = await check_withdrawal_risk(current, amount_cents, account)
-    status = "REVIEW_REQUIRED" if risk == "REVIEW_REQUIRED" else "PENDING"
+    client_ip = request.client.host if request.client else None
+    risk, risk_reasons = await check_withdrawal_risk(current, amount_cents, account, client_ip=client_ip)
+    if risk == "CRITICAL":
+        await create_risk_flag(current["id"], "withdrawal_attempt", body.bank_account_id, risk, risk_reasons)
+        raise HTTPException(403, "Não foi possível processar este saque agora. Nossa equipe entrará em contato.")
+    # HIGH keeps the same persisted withdrawal status ("REVIEW_REQUIRED") the frontend
+    # already knows how to render — only the risk scale underneath got richer.
+    status = "REVIEW_REQUIRED" if risk == "HIGH" else "PENDING"
     withdrawal_id = new_id()
+    if risk == "HIGH":
+        await create_risk_flag(current["id"], "withdrawal", withdrawal_id, risk, risk_reasons)
 
     try:
         # Atomically hold the funds — available -> processing. This is the operation
@@ -184,7 +197,7 @@ async def create_withdrawal(body: WithdrawalIn, current=Depends(get_current_user
 
     withdrawal = {
         "id": withdrawal_id, "user_id": current["id"], "amount": body.amount, "bank_account_id": account["id"],
-        "bank_account_snapshot": mask_account(account), "status": status, "risk_level": risk,
+        "bank_account_snapshot": mask_account(account), "status": status, "risk_level": risk, "risk_reasons": risk_reasons,
         "created_at": now(), "updated_at": now(),
     }
     if idempotency_key:
@@ -206,6 +219,7 @@ async def list_withdrawals(current=Depends(get_current_user)):
 
 @router.post("/wallet/withdrawals/{withdrawal_id}/cancel")
 async def cancel_withdrawal(withdrawal_id: str, current=Depends(get_current_user)):
+    rate_limit(f"cancel-withdrawal:{current['id']}", max_attempts=10, window_seconds=600)
     withdrawal = await db.withdrawals.find_one({"id": withdrawal_id, "user_id": current["id"]})
     if not withdrawal:
         raise HTTPException(404, "Saque não encontrado.")
@@ -236,6 +250,24 @@ async def create_dispute(body: DisputeIn, current=Depends(get_current_user)):
         "evidence": body.evidence, "status": "OPEN", "resolution": "", "created_at": now(), "updated_at": now(),
     }
     await db.disputes.insert_one(dict(dispute))
+    # Best-effort lock: while the order is still "live" (accepted/in_progress/
+    # completion_requested), a dispute freezes it in `disputed` so start/complete/cancel
+    # can't run concurrently — their atomic guards simply stop matching once the status
+    # isn't one of theirs anymore, no changes needed on those endpoints. A dispute about
+    # an already-completed/cancelled order is still valid to open — there's just nothing
+    # left in the lifecycle to freeze.
+    locked = await db.orders.find_one_and_update(
+        {"id": body.order_id, "status": {"$in": ["accepted", "in_progress", "completion_requested"]}},
+        {"$set": {"status": "disputed", "pre_dispute_status": order["status"]}},
+    )
+    if locked:
+        counterpart = order["worker_id"] if current["id"] == order["client_id"] else order["client_id"]
+        if counterpart:
+            await db.notifications.insert_one({
+                "id": new_id(), "user_id": counterpart, "title": "Disputa aberta",
+                "body": f"Uma disputa foi aberta em “{order['title']}”. O pedido ficou em análise.",
+                "type": "dispute", "order_id": body.order_id, "read": False, "created_at": now(),
+            })
     dispute.pop("_id", None)
     return dispute
 

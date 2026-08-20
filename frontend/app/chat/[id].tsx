@@ -25,6 +25,7 @@ export default function Chat() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
+  const [warning, setWarning] = useState<string | null>(null);
   const listRef = useRef<FlatList>(null);
   const poll = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -55,7 +56,8 @@ export default function Chat() {
     setText("");
     setSending(true);
     try {
-      await api.post(`/orders/${id}/messages`, body);
+      const res = await api.post(`/orders/${id}/messages`, body);
+      setWarning(res.warning || null);
       await load();
     } catch (e: any) { Alert.alert("Ops", e.message); } finally { setSending(false); }
   };
@@ -98,6 +100,45 @@ export default function Chat() {
 
   const other = order && me ? (order.client_id === me.id ? order.worker : order.client) : null;
 
+  const openUserActions = () => {
+    if (!other) return;
+    Alert.alert(other.name || "Usuário", undefined, [
+      { text: "Cancelar", style: "cancel" },
+      {
+        text: "Denunciar usuário", onPress: () => {
+          Alert.alert("Denunciar usuário", "Qual o motivo?", [
+            { text: "Cancelar", style: "cancel" },
+            ...["Spam", "Comportamento inadequado", "Golpe ou fraude", "Outro"].map((reason) => ({
+              text: reason,
+              onPress: async () => {
+                try {
+                  await api.post("/reports", { target_type: "user", target_id: other.id, reason });
+                  Alert.alert("Obrigado", "Recebemos sua denúncia.");
+                } catch (e: any) { Alert.alert("Ops", e.message || "Não conseguimos enviar agora."); }
+              },
+            })),
+          ]);
+        },
+      },
+      {
+        text: "Bloquear usuário", style: "destructive", onPress: () => {
+          Alert.alert("Bloquear usuário", "Vocês não vão mais conseguir se contatar. Continuar?", [
+            { text: "Cancelar", style: "cancel" },
+            {
+              text: "Bloquear", style: "destructive", onPress: async () => {
+                try {
+                  await api.post("/blocks", { blocked_user_id: other.id });
+                  Alert.alert("Usuário bloqueado", "Vocês não vão mais conseguir se contatar.");
+                  safeBack(router, "/(tabs)/messages");
+                } catch (e: any) { Alert.alert("Ops", e.message || "Não conseguimos bloquear agora."); }
+              },
+            },
+          ]);
+        },
+      },
+    ]);
+  };
+
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg, paddingTop: insets.top + 8 }}>
       {/* Header */}
@@ -110,6 +151,9 @@ export default function Chat() {
         </View>
         <Pressable testID="chat-order-button" onPress={() => router.push(`/order/${id}`)} hitSlop={8}>
           <Ionicons name="document-text-outline" size={20} color={colors.primary} />
+        </Pressable>
+        <Pressable testID="chat-user-actions-button" onPress={openUserActions} hitSlop={8}>
+          <Ionicons name="ellipsis-vertical" size={20} color={colors.muted} />
         </Pressable>
       </View>
 
@@ -147,6 +191,14 @@ export default function Chat() {
             </View>
           }
         />
+
+        {warning && (
+          <Pressable testID="chat-external-payment-warning" onPress={() => setWarning(null)} style={{ flexDirection: "row", alignItems: "center", gap: 8, marginHorizontal: 16, marginBottom: 8, padding: 10, borderRadius: 12, backgroundColor: colors.dangerSoft }}>
+            <Ionicons name="alert-circle-outline" size={16} color={colors.danger} />
+            <Text style={{ flex: 1, color: colors.danger, fontSize: 12, lineHeight: 16 }}>{warning}</Text>
+            <Ionicons name="close" size={14} color={colors.danger} />
+          </Pressable>
+        )}
 
         {/* Composer */}
         <View style={{ flexDirection: "row", alignItems: "flex-end", gap: 8, paddingHorizontal: 16, paddingTop: 10, paddingBottom: Math.max(insets.bottom, 12), borderTopWidth: 1, borderTopColor: colors.border, backgroundColor: colors.bg }}>

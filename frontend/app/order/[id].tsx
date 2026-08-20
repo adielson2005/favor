@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, Text, View } from "react-native";
 import Animated, { FadeIn, ZoomIn } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -45,6 +45,8 @@ export default function OrderDetail() {
 
   const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [paying, setPaying] = useState(false);
+  const [payPassword, setPayPassword] = useState("");
+  const [payNeedsPassword, setPayNeedsPassword] = useState(false);
 
   const [disputeOpen, setDisputeOpen] = useState(false);
   const [disputeReason, setDisputeReason] = useState(DISPUTE_REASONS[0]);
@@ -75,7 +77,7 @@ export default function OrderDetail() {
 
   const isOwner = me.id === order.client_id;
   const isWorker = me.id === order.worker_id;
-  const myProposal = proposals.find((p) => p.worker_id === me.id);
+  const myProposal = proposals.find((p) => p.worker_id === me.id && p.status === "pending");
   const hasReviewed = isOwner ? order.reviewed_by_client : order.reviewed_by_worker;
   const reviewTarget = isOwner ? order.worker : order.client;
 
@@ -107,7 +109,7 @@ export default function OrderDetail() {
     } catch (e: any) { Alert.alert("Ops", e.message); }
   };
 
-  const changeStatus = async (action: "start" | "complete" | "cancel") => {
+  const changeStatus = async (action: "start" | "request-completion" | "complete" | "cancel") => {
     try {
       await api.post(`/orders/${order.id}/${action}`);
       haptic();
@@ -137,13 +139,21 @@ export default function OrderDetail() {
   const payOrder = async () => {
     setPaying(true);
     try {
-      const result = await api.post(`/orders/${order.id}/pay`, { method: "wallet" }, { "Idempotency-Key": newIdempotencyKey() });
+      const result = await api.post(`/orders/${order.id}/pay`, { method: "wallet", password: payPassword || undefined }, { "Idempotency-Key": newIdempotencyKey() });
       setPayment(result);
       setCheckoutOpen(false);
+      setPayPassword(""); setPayNeedsPassword(false);
       haptic();
       load();
     } catch (e: any) {
-      Alert.alert("Não foi possível pagar", e.message || "Confira seu saldo e tente novamente.");
+      // Backend flags unusually large/risky payments as needing a password reauth
+      // (fraud.py's MEDIUM tier) instead of a hard block — this just reveals the
+      // field so the same "Pagar" button works on the retry.
+      if (/confirme sua senha|senha incorreta/i.test(e.message || "")) {
+        setPayNeedsPassword(true);
+      } else {
+        Alert.alert("Não foi possível pagar", e.message || "Confira seu saldo e tente novamente.");
+      }
     } finally { setPaying(false); }
   };
 
@@ -157,7 +167,9 @@ export default function OrderDetail() {
   };
 
   const otherUser = isOwner ? order.worker : order.client;
-  const statusIndex = { accepted: 0, in_progress: 1, completed: 2 }[order.status] ?? -1;
+  // completion_requested reads as "still on the in_progress step" in the stepper —
+  // it's a sub-state of the same step, not a new one worth its own dot.
+  const statusIndex = { accepted: 0, in_progress: 1, completion_requested: 1, completed: 2 }[order.status] ?? -1;
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg, paddingTop: insets.top + 8 }}>
@@ -190,6 +202,12 @@ export default function OrderDetail() {
           <View style={{ backgroundColor: colors.alt, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 10 }}>
             <Text style={{ color: colors.muted, fontSize: 12, fontWeight: "600" }}>{order.type === "favor" ? "Favor" : "Serviço"}</Text>
           </View>
+          {order.urgent && (
+            <View style={{ backgroundColor: colors.dangerSoft, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 10, flexDirection: "row", alignItems: "center", gap: 5 }}>
+              <Ionicons name="flash" size={13} color={colors.danger} />
+              <Text style={{ color: colors.danger, fontSize: 12, fontWeight: "700" }}>Urgente</Text>
+            </View>
+          )}
         </View>
         <Text style={{ color: colors.ink, fontFamily: fonts.headingExtraBold, fontSize: 23, letterSpacing: -0.5 }}>{order.title}</Text>
         {order.description ? <Text style={{ color: colors.muted, fontSize: 14, lineHeight: 21, marginTop: 8 }}>{order.description}</Text> : null}
@@ -198,6 +216,9 @@ export default function OrderDetail() {
         <View style={{ marginTop: 18, gap: 2 }}>
           <InfoRow icon="location-outline" text={`${order.neighborhood || ""}${order.city ? ` · ${order.city}` : ""} · localização aproximada`} />
           <InfoRow icon="calendar-outline" text={`${order.date_label}${order.time_label ? ` · ${order.time_label}` : ""}`} />
+          {order.recurrence && order.recurrence !== "none" && (
+            <InfoRow icon="repeat-outline" text={{ weekly: "Repete semanalmente", biweekly: "Repete quinzenalmente", monthly: "Repete mensalmente" }[order.recurrence]} />
+          )}
           {Object.entries(order.fields || {}).filter(([, v]) => v).map(([key, value]) => (
             <InfoRow key={key} icon="information-circle-outline" text={`${FIELD_LABELS[key] || key}: ${value}`} />
           ))}
@@ -220,6 +241,20 @@ export default function OrderDetail() {
               <Text style={{ color: colors.ink, fontFamily: fonts.bodySemiBold, fontSize: 13 }}>{PAYMENT_STATUS_LABELS[payment.status] || payment.status}</Text>
               {payment.status === "held" && <Text style={{ color: colors.muted, fontSize: 11 }}>O valor fica protegido até a conclusão do serviço.</Text>}
             </View>
+          </View>
+        )}
+        {order.status === "completion_requested" && (
+          <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm, backgroundColor: colors.alt, borderRadius: radius.md, padding: space.md, marginTop: space.md }}>
+            <Ionicons name="checkmark-done-outline" size={18} color={colors.muted} />
+            <Text style={{ flex: 1, color: colors.ink, fontFamily: fonts.bodySemiBold, fontSize: 13 }}>
+              {isOwner ? "O fazedor marcou o serviço como concluído. Confirme para liberar o pagamento." : "Aguardando confirmação de quem pediu."}
+            </Text>
+          </View>
+        )}
+        {order.status === "disputed" && (
+          <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm, backgroundColor: colors.dangerSoft, borderRadius: radius.md, padding: space.md, marginTop: space.md }}>
+            <Ionicons name="alert-circle" size={18} color={colors.danger} />
+            <Text style={{ flex: 1, color: colors.danger, fontFamily: fonts.bodySemiBold, fontSize: 13 }}>Este pedido está em disputa. Nossa equipe está analisando.</Text>
           </View>
         )}
         {isOwner && order.status === "accepted" && (!payment || payment.status === "pending") && (
@@ -247,7 +282,7 @@ export default function OrderDetail() {
           </View>
         )}
 
-        {(isOwner || isWorker) && ["accepted", "in_progress", "completed"].includes(order.status) && (
+        {(isOwner || isWorker) && ["accepted", "in_progress", "completion_requested", "completed"].includes(order.status) && (
           <Pressable testID="dispute-button" onPress={() => setDisputeOpen(true)} style={{ alignSelf: "flex-start", marginTop: space.md }} hitSlop={8}>
             <Text style={{ color: colors.faint, fontFamily: fonts.bodySemiBold, fontSize: 12 }}>Tenho um problema com este pedido</Text>
           </Pressable>
@@ -316,23 +351,65 @@ export default function OrderDetail() {
             )}
           </View>
         )}
+
+        {isOwner && order.status === "completed" && (
+          <View style={{ marginTop: 16 }}>
+            <Btn
+              testID="rehire-button"
+              title="Contratar novamente"
+              variant="secondary"
+              icon="repeat-outline"
+              onPress={() => router.push({ pathname: "/create", params: { prefillFrom: order.id } })}
+            />
+          </View>
+        )}
       </ScrollView>
 
       {/* Bottom CTA */}
-      {(order.status === "published" && !isOwner) || ((isOwner || isWorker) && ["accepted", "in_progress"].includes(order.status)) ? (
+      {(order.status === "published" && !isOwner) || ((isOwner || isWorker) && ["accepted", "in_progress", "completion_requested"].includes(order.status)) ? (
         <View style={{ paddingHorizontal: 20, paddingTop: 12, paddingBottom: Math.max(insets.bottom, 16), borderTopWidth: 1, borderTopColor: colors.border, backgroundColor: colors.bg, gap: 10 }}>
           {order.status === "published" && !isOwner && (
             myProposal
-              ? <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, height: 52, borderRadius: 16, backgroundColor: colors.greenSoft }}>
-                  <Ionicons name="checkmark-circle" size={18} color={colors.green} />
-                  <Text style={{ color: colors.green, fontWeight: "700" }}>Proposta enviada · R$ {myProposal.amount}</Text>
+              ? <View style={{ gap: 8 }}>
+                  <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, height: 52, borderRadius: 16, backgroundColor: colors.greenSoft }}>
+                    <Ionicons name="checkmark-circle" size={18} color={colors.green} />
+                    <Text style={{ color: colors.green, fontWeight: "700" }}>Proposta enviada · R$ {myProposal.amount}</Text>
+                  </View>
+                  <Btn
+                    testID="cancel-proposal-button"
+                    title="Retirar proposta"
+                    variant="ghost"
+                    onPress={() => Alert.alert("Retirar proposta", "Tem certeza que quer cancelar sua proposta?", [
+                      { text: "Não" },
+                      { text: "Sim, retirar", style: "destructive", onPress: async () => {
+                          try { await api.post(`/proposals/${myProposal.id}/cancel`); load(); }
+                          catch (e: any) { Alert.alert("Ops", e.message || "Não conseguimos cancelar agora."); }
+                        } },
+                    ])}
+                  />
                 </View>
               : <Btn testID="open-proposal-button" title="Enviar proposta" icon="send-outline" onPress={() => { setAmount(String(order.budget)); setProposalOpen(true); }} />
           )}
-          {["accepted", "in_progress"].includes(order.status) && (isOwner || isWorker) && (
+          {["accepted", "in_progress", "completion_requested"].includes(order.status) && (isOwner || isWorker) && (
             <>
               {order.status === "accepted" && isWorker && <Btn testID="start-order-button" title="Iniciar serviço" icon="play" onPress={() => changeStatus("start")} />}
-              {order.status === "in_progress" && isOwner && <Btn testID="complete-order-button" title="Deu tudo certo? Concluir" icon="checkmark" onPress={() => Alert.alert("Concluir serviço", "Confirmar que o serviço foi realizado?", [{ text: "Ainda não" }, { text: "Concluir", onPress: () => changeStatus("complete") }])} />}
+              {order.status === "in_progress" && isWorker && (
+                <Btn
+                  testID="request-completion-button"
+                  title="Marcar como concluído"
+                  icon="checkmark-done"
+                  variant="secondary"
+                  onPress={() => Alert.alert("Marcar como concluído", "Confirma que você concluiu o serviço? Quem pediu vai confirmar para liberar o pagamento.", [{ text: "Ainda não" }, { text: "Concluí", onPress: () => changeStatus("request-completion") }])}
+                />
+              )}
+              {["in_progress", "completion_requested"].includes(order.status) && isOwner && (
+                <Btn
+                  testID="complete-order-button"
+                  title={order.status === "completion_requested" ? "Confirmar conclusão" : "Deu tudo certo? Concluir"}
+                  icon="checkmark"
+                  onPress={() => Alert.alert("Concluir serviço", "Confirmar que o serviço foi realizado?", [{ text: "Ainda não" }, { text: "Concluir", onPress: () => changeStatus("complete") }])}
+                />
+              )}
               <Btn testID="open-chat-button" title="Abrir conversa" variant="secondary" icon="chatbubble-outline" onPress={() => router.push(`/chat/${order.id}`)} />
             </>
           )}
@@ -361,8 +438,12 @@ export default function OrderDetail() {
       </Sheet>
 
       {/* Checkout sheet */}
-      <Sheet visible={checkoutOpen} onClose={() => setCheckoutOpen(false)} title="Confirmar pagamento">
+      <Sheet visible={checkoutOpen} onClose={() => { setCheckoutOpen(false); setPayPassword(""); setPayNeedsPassword(false); }} title="Confirmar pagamento">
         <View style={{ gap: space.md, paddingVertical: space.md, paddingBottom: space.xxl }}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm, backgroundColor: colors.greenSoft, borderRadius: radius.md, padding: space.md }}>
+            <Ionicons name="shield-checkmark" size={18} color={colors.green} />
+            <Text style={{ flex: 1, color: colors.green, fontFamily: fonts.bodySemiBold, fontSize: 12 }}>Pagamento protegido. O valor só é liberado após a conclusão do serviço.</Text>
+          </View>
           <View style={{ backgroundColor: colors.alt, borderRadius: radius.md, padding: space.lg, gap: space.sm }}>
             <CheckoutRow label="Serviço" value={order.title} />
             <CheckoutRow label="Prestador" value={order.worker?.name || "—"} />
@@ -372,8 +453,24 @@ export default function OrderDetail() {
             <View style={{ height: 1, backgroundColor: colors.border, marginVertical: space.xs }} />
             <CheckoutRow label="Total" value={`R$ ${(order.accepted_amount || 0).toFixed(2).replace(".", ",")}`} strong />
           </View>
+          {payNeedsPassword && (
+            <Field
+              label="Confirme sua senha"
+              value={payPassword}
+              onChangeText={setPayPassword}
+              secureTextEntry
+              placeholder="Por segurança, confirme sua senha"
+              testID="pay-password-input"
+            />
+          )}
           <Text style={{ color: colors.faint, fontSize: 12 }}>O valor fica protegido até você confirmar a conclusão do serviço.</Text>
-          <Btn testID="confirm-payment-button" title={paying ? "Processando..." : `Pagar R$ ${(order.accepted_amount || 0).toFixed(2).replace(".", ",")}`} onPress={payOrder} loading={paying} />
+          <Btn
+            testID="confirm-payment-button"
+            title={paying ? "Processando..." : `Pagar R$ ${(order.accepted_amount || 0).toFixed(2).replace(".", ",")}`}
+            onPress={payOrder}
+            loading={paying}
+            disabled={payNeedsPassword && !payPassword}
+          />
         </View>
       </Sheet>
 
@@ -413,6 +510,12 @@ function InfoRow({ icon, text }: { icon: keyof typeof Ionicons.glyphMap; text: s
 
 function UserCard({ user }: { user: NonNullable<Order["client"]> }) {
   const { colors } = useTheme();
+  const [completionRate, setCompletionRate] = useState<number | null>(null);
+
+  useEffect(() => {
+    api.get(`/users/${user.id}/stats`).then((s) => setCompletionRate(s.completion_rate)).catch(() => {});
+  }, [user.id]);
+
   return (
     <View style={{ flexDirection: "row", alignItems: "center", gap: 12, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderRadius: 16, padding: 14 }}>
       <Avatar name={user.name} initials={user.initials} size={44} />
@@ -421,7 +524,10 @@ function UserCard({ user }: { user: NonNullable<Order["client"]> }) {
           <Text style={{ color: colors.ink, fontSize: 14, fontWeight: "700" }}>{user.name}</Text>
           {user.verified_identity && <Ionicons name="checkmark-circle" size={14} color={colors.green} />}
         </View>
-        <Text style={{ color: colors.muted, fontSize: 12 }}>★ {user.rating} · {user.jobs_done} serviços · {user.level}</Text>
+        <Text style={{ color: colors.muted, fontSize: 12 }}>
+          ★ {user.rating} · {user.jobs_done} serviços · {user.level}
+          {completionRate != null ? ` · ${Math.round(completionRate * 100)}% de conclusão` : ""}
+        </Text>
       </View>
     </View>
   );

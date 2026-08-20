@@ -5,6 +5,8 @@ import { Pressable, RefreshControl, ScrollView, Text, View } from "react-native"
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { api, Order } from "@/src/api";
+import { FazumPayBanner } from "@/src/components/FazumPayBanner";
+import { Highlight, HighlightsCarousel } from "@/src/components/HighlightsCarousel";
 import { OrderCard } from "@/src/components/OrderCard";
 import { Avatar, Btn, EmptyState, Segmented, Skeleton } from "@/src/components/ui";
 import { fonts } from "@/src/hooks/use-app-fonts";
@@ -51,10 +53,17 @@ export default function Home() {
   const isClient = mode === "client";
   const nearby = orders.slice(0, 3);
 
+  // Destaques/anúncios/atualizações — add more entries here (or later swap for a
+  // backend-driven list) and the carousel's paging/drag/dots keep working as-is.
+  const highlights: Highlight[] = [
+    { id: "slogan", image: require("@/assets/images/slogan.png") },
+    { id: "fazumpay", content: <FazumPayBanner />, onPress: () => router.push("/wallet") },
+  ];
+
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg }}>
       <ScrollView
-        contentContainerStyle={{ paddingTop: insets.top + 16, paddingBottom: 32, width: "100%", maxWidth: isDesktop ? 720 : undefined, alignSelf: "center" }}
+        contentContainerStyle={{ paddingTop: insets.top + 16, paddingBottom: 32, width: "100%", maxWidth: isDesktop ? 960 : undefined, alignSelf: "center" }}
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} tintColor={colors.muted} />}
       >
@@ -74,6 +83,11 @@ export default function Home() {
           <Pressable onPress={() => router.push("/(tabs)/profile")}>
             <Avatar name={me.name} initials={me.initials} size={42} />
           </Pressable>
+        </View>
+
+        {/* Destaques/anúncios/atualizações */}
+        <View style={{ paddingHorizontal: 20, marginTop: 18 }}>
+          <HighlightsCarousel testID="home-highlights" items={highlights} />
         </View>
 
         {/* Email verification nudge — non-blocking, dismiss by verifying or ignoring */}

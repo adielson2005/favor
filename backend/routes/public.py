@@ -1,16 +1,21 @@
 import re
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from pymongo import ReturnDocument
 
-from auth import get_current_user, get_optional_user, rate_limit
+from auth import get_current_user, get_optional_user, rate_limit, verify_password
+from chat_safety import scan_message_for_external_payment
 from database import db, new_id, now
+from fraud import check_payment_risk, create_risk_flag
 from models import (BlockCreate, FavoriteToggle, MessageCreate, OrderCreate, OrderUpdate,
                     PayOrderIn, ProfileUpdate, ProposalCreate, ReportCreate, ReviewCreate)
 from wallet import (
-    InsufficientFundsError, credit_wallet, debit_wallet, get_commission_config,
-    move_bucket, to_cents, to_reais, transaction_public,
+    PLATFORM_WALLET_USER_ID, InsufficientFundsError, credit_wallet, debit_wallet,
+    get_commission_config, move_bucket, to_cents, to_reais, transaction_public,
 )
+
+EXTERNAL_PAYMENT_WARNING = "Para sua segurança, mantenha pagamentos e negociações dentro do fazum."
 
 MAX_IMAGE_B64_CHARS = 2_000_000  # ~1.4MB decoded — generous for a chat photo, cheap to reject before it hits Mongo
 ALLOWED_IMAGE_PREFIXES = ("data:image/jpeg", "data:image/jpg", "data:image/png", "data:image/webp")
@@ -30,8 +35,10 @@ STATUS_LABELS = {
     "published": "Recebendo propostas",
     "accepted": "Aceito",
     "in_progress": "Em andamento",
+    "completion_requested": "Aguardando confirmação",
     "completed": "Concluído",
     "cancelled": "Cancelado",
+    "disputed": "Em disputa",
 }
 
 
@@ -86,11 +93,22 @@ async def enrich_orders(orders: list[dict]) -> list[dict]:
 
 
 async def notify(user_id: str, title: str, body: str, kind: str, order_id: Optional[str] = None):
+    user = await db.users.find_one({"id": user_id}, {"notification_prefs": 1})
+    if user and (user.get("notification_prefs") or {}).get(kind) is False:
+        return
     await db.notifications.insert_one({"id": new_id(), "user_id": user_id, "title": title, "body": body, "type": kind, "order_id": order_id, "read": False, "created_at": now()})
 
 
 async def system_message(order_id: str, text: str):
     await db.messages.insert_one({"id": new_id(), "order_id": order_id, "sender_id": "system", "type": "system", "text": text, "created_at": now()})
+
+
+async def assert_not_blocked(user_a: str, user_b: str):
+    if await db.blocks.find_one({"$or": [
+        {"user_id": user_a, "blocked_user_id": user_b},
+        {"user_id": user_b, "blocked_user_id": user_a},
+    ]}):
+        raise HTTPException(403, "Não é possível interagir com este usuário.")
 
 
 # ---------- bootstrap / geo / catalog ----------
@@ -159,6 +177,14 @@ async def update_user(user_id: str, body: ProfileUpdate, current=Depends(get_cur
     return await get_user(user_id)
 
 
+@router.get("/users/{user_id}/stats")
+async def user_stats(user_id: str):
+    completed = await db.orders.count_documents({"worker_id": user_id, "status": "completed"})
+    cancelled = await db.orders.count_documents({"worker_id": user_id, "status": "cancelled"})
+    total = completed + cancelled
+    return {"completion_rate": round(completed / total, 2) if total else None}
+
+
 @router.get("/users/{user_id}/reviews")
 async def user_reviews(user_id: str):
     reviews = await db.reviews.find({"to_id": user_id}, {"_id": 0}).sort("created_at", -1).to_list(50)
@@ -174,9 +200,12 @@ async def list_orders(city_id: Optional[str] = None, category_id: Optional[str] 
                       neighborhood_id: Optional[str] = None, type: Optional[str] = None,
                       q: Optional[str] = None, status: Optional[str] = None,
                       client_id: Optional[str] = None, worker_id: Optional[str] = None,
-                      max_budget: Optional[float] = None, limit: int = 20, offset: int = 0,
+                      max_budget: Optional[float] = None, urgent: Optional[bool] = None,
+                      limit: int = 20, offset: int = 0,
                       current: Optional[dict] = Depends(get_optional_user)):
     query: dict = {}
+    if urgent is not None:
+        query["urgent"] = urgent
     if city_id:
         query["city_id"] = city_id
     if category_id:
@@ -257,11 +286,8 @@ async def update_order(order_id: str, body: OrderUpdate, current=Depends(get_cur
     return await get_order(order_id)
 
 
-PLATFORM_WALLET_USER_ID = "platform"
-
-
 @router.post("/orders/{order_id}/pay")
-async def pay_order(order_id: str, body: PayOrderIn, current=Depends(get_current_user), idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key")):
+async def pay_order(order_id: str, body: PayOrderIn, request: Request, current=Depends(get_current_user), idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key")):
     rate_limit(f"pay-order:{current['id']}", max_attempts=20, window_seconds=600)
     order = await db.orders.find_one({"id": order_id})
     if not order:
@@ -270,6 +296,8 @@ async def pay_order(order_id: str, body: PayOrderIn, current=Depends(get_current
         raise HTTPException(403, "Apenas quem pediu pode pagar por este pedido")
     if order["status"] != "accepted":
         raise HTTPException(400, "Este pedido não está pronto para pagamento")
+    if order.get("external_payment_restricted"):
+        raise HTTPException(403, "Esta conversa foi restrita por possível tentativa de pagamento fora da plataforma. Fale com o suporte.")
     if body.method != "wallet":
         raise HTTPException(501, "Esse método de pagamento ainda não está disponível.")
 
@@ -279,6 +307,20 @@ async def pay_order(order_id: str, body: PayOrderIn, current=Depends(get_current
     if gross_reais <= 0:
         raise HTTPException(400, "Valor do pedido inválido.")
     gross_cents = to_cents(gross_reais)
+
+    client_ip = request.client.host if request.client else None
+    risk, risk_reasons = await check_payment_risk(current, gross_cents, order, client_ip=client_ip)
+    if risk == "CRITICAL":
+        await create_risk_flag(current["id"], "payment_attempt", order_id, risk, risk_reasons)
+        raise HTTPException(403, "Este pagamento não pode ser processado agora. Fale com o suporte.")
+    if risk == "HIGH":
+        await create_risk_flag(current["id"], "payment", order_id, risk, risk_reasons)
+    if risk == "MEDIUM":
+        if not body.password:
+            raise HTTPException(401, "Por segurança, confirme sua senha para concluir este pagamento.")
+        if not verify_password(body.password, current.get("password_hash") or ""):
+            raise HTTPException(401, "Senha incorreta.")
+
     config = await get_commission_config()
     commission_cents = round(gross_cents * config["commission_percent"] / 100)
     worker_net_cents = gross_cents - commission_cents
@@ -288,7 +330,7 @@ async def pay_order(order_id: str, body: PayOrderIn, current=Depends(get_current
         "gross_amount": to_reais(gross_cents), "commission_amount": to_reais(commission_cents),
         "worker_net_amount": to_reais(worker_net_cents), "commission_percent": config["commission_percent"],
         "method": "wallet", "status": "pending", "provider": None, "provider_transaction_id": None,
-        "idempotency_key": idempotency_key, "created_at": now(), "updated_at": now(),
+        "idempotency_key": idempotency_key, "client_ip": client_ip, "created_at": now(), "updated_at": now(),
     }
     try:
         # The unique index on payments.order_id is what actually closes the race —
@@ -329,6 +371,7 @@ async def get_order_payment(order_id: str, current=Depends(get_current_user)):
 
 @router.post("/orders/{order_id}/start")
 async def start_order(order_id: str, current=Depends(get_current_user)):
+    rate_limit(f"start-order:{current['id']}", max_attempts=30, window_seconds=600)
     order = await db.orders.find_one({"id": order_id})
     if not order:
         raise HTTPException(404, "Pedido não encontrado")
@@ -342,14 +385,39 @@ async def start_order(order_id: str, current=Depends(get_current_user)):
     return {"ok": True, "status": "in_progress"}
 
 
+@router.post("/orders/{order_id}/request-completion")
+async def request_completion(order_id: str, current=Depends(get_current_user)):
+    rate_limit(f"request-completion:{current['id']}", max_attempts=30, window_seconds=600)
+    order = await db.orders.find_one({"id": order_id})
+    if not order:
+        raise HTTPException(404, "Pedido não encontrado")
+    if current["id"] != order.get("worker_id"):
+        raise HTTPException(403, "Apenas o fazedor escolhido pode marcar como concluído")
+    result = await db.orders.find_one_and_update(
+        {"id": order_id, "status": "in_progress"},
+        {"$set": {"status": "completion_requested", "completion_requested_at": now()}},
+    )
+    if not result:
+        raise HTTPException(400, "Este pedido não está em andamento")
+    await system_message(order_id, "O fazedor marcou o serviço como concluído. Aguardando confirmação de quem pediu.")
+    await notify(order["client_id"], "Serviço concluído pelo fazedor", "Confirme para liberar o pagamento.", "status", order_id)
+    return {"ok": True, "status": "completion_requested"}
+
+
 @router.post("/orders/{order_id}/complete")
 async def complete_order(order_id: str, current=Depends(get_current_user)):
+    rate_limit(f"complete-order:{current['id']}", max_attempts=30, window_seconds=600)
     order = await db.orders.find_one({"id": order_id})
     if not order:
         raise HTTPException(404, "Pedido não encontrado")
     if current["id"] != order["client_id"]:
         raise HTTPException(403, "Apenas quem pediu pode concluir")
-    result = await db.orders.find_one_and_update({"id": order_id, "status": "in_progress"}, {"$set": {"status": "completed", "completed_at": now()}})
+    # Client can complete directly from in_progress (the worker signaling first via
+    # /request-completion is optional, not required) or from completion_requested.
+    result = await db.orders.find_one_and_update(
+        {"id": order_id, "status": {"$in": ["in_progress", "completion_requested"]}},
+        {"$set": {"status": "completed", "completed_at": now()}},
+    )
     if not result:
         raise HTTPException(400, "Este pedido não está em andamento")
     if order.get("worker_id"):
@@ -377,6 +445,7 @@ async def complete_order(order_id: str, current=Depends(get_current_user)):
 
 @router.post("/orders/{order_id}/cancel")
 async def cancel_order(order_id: str, current=Depends(get_current_user)):
+    rate_limit(f"cancel-order:{current['id']}", max_attempts=30, window_seconds=600)
     order = await db.orders.find_one({"id": order_id})
     if not order:
         raise HTTPException(404, "Pedido não encontrado")
@@ -418,6 +487,7 @@ async def create_proposal(order_id: str, body: ProposalCreate, current=Depends(g
         raise HTTPException(400, "Este pedido não está mais recebendo propostas")
     if order["client_id"] == current["id"]:
         raise HTTPException(400, "Você não pode enviar proposta para o próprio pedido")
+    await assert_not_blocked(current["id"], order["client_id"])
     if await db.proposals.find_one({"order_id": order_id, "worker_id": current["id"]}):
         raise HTTPException(400, "Você já enviou uma proposta para este pedido")
     proposal = body.model_dump() | {"id": new_id(), "order_id": order_id, "worker_id": current["id"], "status": "pending", "created_at": now()}
@@ -437,6 +507,8 @@ async def accept_proposal(proposal_id: str, current=Depends(get_current_user)):
         raise HTTPException(403, "Apenas quem pediu pode aceitar propostas")
     if proposal["status"] != "pending":
         raise HTTPException(400, "Esta proposta não está mais disponível")
+    if order.get("external_payment_restricted"):
+        raise HTTPException(403, "Esta conversa foi restrita por possível tentativa de pagamento fora da plataforma. Fale com o suporte.")
     # Atomic claim on the order: only succeeds while it's still published, so a double
     # tap or two near-simultaneous accepts can't both go through and clobber worker_id.
     claimed = await db.orders.find_one_and_update(
@@ -453,6 +525,25 @@ async def accept_proposal(proposal_id: str, current=Depends(get_current_user)):
     for other in other_proposals:
         await notify(other["worker_id"], "Proposta não aceita", f"Outra proposta foi escolhida para “{order['title']}”.", "reject", proposal["order_id"])
     return proposal | {"status": "accepted"}
+
+
+@router.post("/proposals/{proposal_id}/cancel")
+async def cancel_proposal(proposal_id: str, current=Depends(get_current_user)):
+    rate_limit(f"cancel-proposal:{current['id']}", max_attempts=30, window_seconds=600)
+    proposal = await db.proposals.find_one({"id": proposal_id})
+    if not proposal:
+        raise HTTPException(404, "Proposta não encontrada")
+    if proposal["worker_id"] != current["id"]:
+        raise HTTPException(403, "Você só pode cancelar sua própria proposta")
+    # Atomic guard: only a still-pending proposal can be withdrawn — once an order's
+    # been decided, losing proposals are already "rejected" and the winner "accepted".
+    claimed = await db.proposals.find_one_and_update(
+        {"id": proposal_id, "status": "pending"},
+        {"$set": {"status": "cancelled"}},
+    )
+    if not claimed:
+        raise HTTPException(400, "Esta proposta não pode mais ser cancelada")
+    return {"ok": True, "status": "cancelled"}
 
 
 # ---------- chat ----------
@@ -473,7 +564,36 @@ async def send_message(order_id: str, body: MessageCreate, current=Depends(get_c
         raise HTTPException(404, "Pedido não encontrado")
     if current["id"] not in (order["client_id"], order.get("worker_id")):
         raise HTTPException(403, "Você não participa desta conversa")
+    counterpart = order["worker_id"] if current["id"] == order["client_id"] else order["client_id"]
+    if counterpart:
+        await assert_not_blocked(current["id"], counterpart)
     validate_image_b64(body.image_b64)
+
+    # Non-blocking external-payment detection — never censors the message itself,
+    # only escalates what happens around it as the same category repeats.
+    warning = None
+    categories = scan_message_for_external_payment(body.text)
+    if categories:
+        updated_order = await db.orders.find_one_and_update(
+            {"id": order_id},
+            {"$inc": {f"external_payment_flags.{c}": 1 for c in categories}},
+            return_document=ReturnDocument.AFTER,
+        )
+        flags = (updated_order or {}).get("external_payment_flags") or {}
+        max_count = max((flags.get(c, 0) for c in categories), default=0)
+        distinct_categories = len(flags)
+        warning = EXTERNAL_PAYMENT_WARNING
+        if max_count >= 6:
+            await db.orders.update_one({"id": order_id}, {"$set": {"external_payment_restricted": True}})
+            await create_risk_flag(current["id"], "chat_external_payment", order_id, "CRITICAL", categories)
+            warning = "Esta conversa foi restrita por possível tentativa de pagamento fora da plataforma. Fale com o suporte."
+        elif max_count >= 4 or distinct_categories >= 3:
+            rate_limit(f"send-message-flagged:{order_id}", max_attempts=5, window_seconds=600)
+            await create_risk_flag(current["id"], "chat_external_payment", order_id, "HIGH", categories)
+        elif max_count >= 2:
+            await system_message(order_id, "Mensagens contendo dados de pagamento externo foram detectadas. Pagamentos fora do fazum não têm proteção.")
+            await create_risk_flag(current["id"], "chat_external_payment", order_id, "MEDIUM", categories)
+
     message = {"id": new_id(), "order_id": order_id, "sender_id": current["id"],
                "type": "image" if body.image_b64 else "text", "text": body.text,
                "image_b64": body.image_b64, "created_at": now()}
@@ -481,6 +601,8 @@ async def send_message(order_id: str, body: MessageCreate, current=Depends(get_c
     other = order["client_id"] if current["id"] != order["client_id"] else order.get("worker_id")
     if other:
         await notify(other, "Nova mensagem", body.text[:80] or "Enviou uma imagem", "message", order_id)
+    if warning:
+        message["warning"] = warning
     return message
 
 
@@ -534,15 +656,31 @@ async def create_review(body: ReviewCreate, current=Depends(get_current_user)):
 @router.post("/reports")
 async def create_report(body: ReportCreate, current=Depends(get_current_user)):
     rate_limit(f"create-report:{current['id']}", max_attempts=20, window_seconds=600)
-    report = body.model_dump() | {"id": new_id(), "reporter_id": current["id"], "status": "open", "created_at": now()}
+    report = body.model_dump() | {"id": new_id(), "reporter_id": current["id"], "status": "OPEN", "created_at": now()}
     await db.reports.insert_one(dict(report))
     return report
 
 
 @router.post("/blocks")
 async def create_block(body: BlockCreate, current=Depends(get_current_user)):
+    rate_limit(f"create-block:{current['id']}", max_attempts=30, window_seconds=600)
+    if body.blocked_user_id == current["id"]:
+        raise HTTPException(400, "Você não pode bloquear a si mesmo")
     if not await db.blocks.find_one({"user_id": current["id"], "blocked_user_id": body.blocked_user_id}):
         await db.blocks.insert_one(body.model_dump() | {"id": new_id(), "user_id": current["id"], "created_at": now()})
+    return {"ok": True}
+
+
+@router.get("/blocks")
+async def list_blocks(current=Depends(get_current_user)):
+    blocks = await db.blocks.find({"user_id": current["id"]}, {"_id": 0}).to_list(200)
+    users = {u["id"]: u async for u in db.users.find({"id": {"$in": [b["blocked_user_id"] for b in blocks]}}, {"_id": 0})}
+    return [b | {"user": public_user(users.get(b["blocked_user_id"]))} for b in blocks]
+
+
+@router.delete("/blocks/{blocked_user_id}")
+async def delete_block(blocked_user_id: str, current=Depends(get_current_user)):
+    await db.blocks.delete_one({"user_id": current["id"], "blocked_user_id": blocked_user_id})
     return {"ok": True}
 
 
@@ -570,13 +708,14 @@ async def list_favorites(current=Depends(get_current_user)):
 # ---------- notifications ----------
 
 @router.get("/notifications")
-async def list_notifications(current=Depends(get_current_user)):
-    items = await db.notifications.find({"user_id": current["id"]}, {"_id": 0}).sort("created_at", -1).to_list(50)
+async def list_notifications(limit: int = 50, offset: int = 0, current=Depends(get_current_user)):
+    items = await db.notifications.find({"user_id": current["id"]}, {"_id": 0}).sort("created_at", -1).skip(max(offset, 0)).to_list(min(limit, 100))
     unread = await db.notifications.count_documents({"user_id": current["id"], "read": False})
     return {"items": items, "unread": unread}
 
 
 @router.post("/notifications/read")
 async def read_notifications(current=Depends(get_current_user)):
+    rate_limit(f"read-notifications:{current['id']}", max_attempts=60, window_seconds=300)
     await db.notifications.update_many({"user_id": current["id"]}, {"$set": {"read": True}})
     return {"ok": True}

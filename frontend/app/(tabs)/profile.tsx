@@ -4,35 +4,40 @@ import { useRouter } from "expo-router";
 import React, { useMemo, useState } from "react";
 import { Alert, Linking, Pressable, ScrollView, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import Animated, { FadeInDown } from "react-native-reanimated";
 
 import { api } from "@/src/api";
 import { useAuth } from "@/src/auth";
-import { Avatar, Btn, Chip, Field, Row, Segmented, Sheet, Stars } from "@/src/components/ui";
+import { AvatarCropModal } from "@/src/components/AvatarCropModal";
+import { Avatar, Btn, Chip, Field, Sheet, Stars } from "@/src/components/ui";
 import { fonts } from "@/src/hooks/use-app-fonts";
+import { useBreakpoint } from "@/src/hooks/use-breakpoint";
 import { useApp } from "@/src/state";
-import { ThemePref, useTheme } from "@/src/theme";
+import { radius, space, useTheme } from "@/src/theme";
+
+type Icon = keyof typeof Ionicons.glyphMap;
 
 export default function Profile() {
-  const { colors, pref, setPref } = useTheme();
+  const { colors } = useTheme();
   const { me, mode, cities, neighborhoods, city, refreshMe } = useApp();
-  const { logout, changePassword, deleteAccount } = useAuth();
+  const { changePassword, logout } = useAuth();
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { isDesktop } = useBreakpoint();
 
   const [editOpen, setEditOpen] = useState(false);
   const [locationOpen, setLocationOpen] = useState(false);
-  const [reportOpen, setReportOpen] = useState(false);
   const [passwordOpen, setPasswordOpen] = useState(false);
   const [name, setName] = useState("");
   const [bio, setBio] = useState("");
   const [cityId, setCityId] = useState<string | null>(null);
   const [hood, setHood] = useState<string | null>(null);
-  const [reportText, setReportText] = useState("");
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [saving, setSaving] = useState(false);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const [cropUri, setCropUri] = useState<string | null>(null);
 
   const myHood = neighborhoods.find((n) => n.id === me?.neighborhood_id);
   const hoodsInSelectedCity = useMemo(() => neighborhoods.filter((n) => n.city_id === cityId), [neighborhoods, cityId]);
@@ -63,11 +68,19 @@ export default function Profile() {
       const asked = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (!asked.granted) return;
     }
-    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ["images"], quality: 0.4, base64: true, allowsEditing: true, aspect: [1, 1] });
-    if (result.canceled || !result.assets[0]?.base64) return;
+    // No native allowsEditing here — its crop UI is iOS/Android-only and silently does
+    // nothing on web. AvatarCropModal below gives the same drag-to-reposition +
+    // zoom-to-adjust experience on every platform instead of two different flows.
+    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ["images"] });
+    if (result.canceled || !result.assets[0]?.uri) return;
+    setCropUri(result.assets[0].uri);
+  };
+
+  const confirmAvatarCrop = async (base64: string) => {
+    setCropUri(null);
     setUploadingPhoto(true);
     try {
-      await api.patch(`/users/${me.id}`, { avatar_b64: `data:image/jpeg;base64,${result.assets[0].base64}` });
+      await api.patch(`/users/${me.id}`, { avatar_b64: base64 });
       refreshMe();
     } catch (e: any) {
       Alert.alert("Não foi possível atualizar a foto", e.message || "Tente novamente.");
@@ -85,17 +98,6 @@ export default function Profile() {
     } catch { Alert.alert("Ops", "Não conseguimos salvar agora."); } finally { setSaving(false); }
   };
 
-  const sendReport = async () => {
-    if (!reportText.trim()) return;
-    setSaving(true);
-    try {
-      await api.post("/reports", { target_type: "user", target_id: "app", reason: "Problema no aplicativo", details: reportText });
-      setReportOpen(false);
-      setReportText("");
-      Alert.alert("Obrigado", "Recebemos o seu relato. Vamos analisar.");
-    } catch { Alert.alert("Ops", "Não conseguimos enviar agora."); } finally { setSaving(false); }
-  };
-
   const savePassword = async () => {
     if (newPassword.length < 8) { Alert.alert("Senha muito curta", "Use pelo menos 8 caracteres."); return; }
     if (newPassword !== confirmPassword) { Alert.alert("As senhas não coincidem", "Confira e tente de novo."); return; }
@@ -104,115 +106,101 @@ export default function Profile() {
       await changePassword(currentPassword, newPassword);
       setPasswordOpen(false);
       setCurrentPassword(""); setNewPassword(""); setConfirmPassword("");
-      Alert.alert("Pronto", "Sua senha foi alterada.");
+      // The backend invalidates this session as part of the password change, so the
+      // cached token is already stale — log out and send the user to log in again.
+      await logout();
+      Alert.alert("Pronto", "Sua senha foi alterada. Entre novamente.");
+      router.replace("/auth/welcome");
     } catch (e: any) {
       Alert.alert("Não foi possível trocar a senha", e.message || "Confira a senha atual.");
     } finally { setSaving(false); }
   };
 
-  const confirmDeleteAccount = () => {
-    Alert.alert("Excluir conta", "Isso vai apagar seus dados pessoais e bloquear o acesso. Não é possível desfazer. Continuar?", [
-      { text: "Cancelar", style: "cancel" },
-      { text: "Excluir conta", style: "destructive", onPress: async () => {
-        try {
-          await deleteAccount();
-          router.replace("/auth/welcome");
-        } catch (e: any) {
-          Alert.alert("Não foi possível excluir", e.message || "Tente novamente.");
-        }
-      } },
-    ]);
-  };
-
-  const doLogout = async () => {
-    await logout();
-    router.replace("/auth/welcome");
-  };
+  const stats = [
+    { label: "Avaliação", value: String(me.rating) },
+    { label: "Serviços", value: String(me.jobs_done) },
+    { label: "Desde", value: String(memberSince) },
+  ];
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg }}>
-      <ScrollView contentContainerStyle={{ paddingTop: insets.top + 16, paddingBottom: 40, paddingHorizontal: 20 }} showsVerticalScrollIndicator={false}>
-        {/* Header */}
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 16 }}>
+      <ScrollView contentContainerStyle={{ paddingTop: insets.top + 16, paddingBottom: 40, paddingHorizontal: 20, width: "100%", maxWidth: isDesktop ? 720 : undefined, alignSelf: "center" }} showsVerticalScrollIndicator={false}>
+        <View style={{ flexDirection: "row", justifyContent: "flex-end" }}>
+          <Pressable testID="open-settings-button" onPress={() => router.push("/settings")} hitSlop={10} style={{ width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center" }}>
+            <Ionicons name="settings-outline" size={20} color={colors.muted} />
+          </Pressable>
+        </View>
+
+        {/* Header — centered, no chrome, lets whitespace and type do the work */}
+        <Animated.View entering={FadeInDown.duration(280)} style={{ alignItems: "center", marginTop: -8 }}>
           <Pressable testID="edit-avatar-button" onPress={pickAvatar} disabled={uploadingPhoto} style={{ opacity: uploadingPhoto ? 0.5 : 1 }}>
-            <Avatar name={me.name} initials={me.initials} size={68} photo={me.avatar_b64} />
-            <View style={{ position: "absolute", right: -2, bottom: -2, width: 24, height: 24, borderRadius: 12, backgroundColor: colors.primary, alignItems: "center", justifyContent: "center", borderWidth: 2, borderColor: colors.bg }}>
-              <Ionicons name="camera" size={12} color={colors.onPrimary} />
+            <Avatar name={me.name} initials={me.initials} size={92} photo={me.avatar_b64} />
+            <View style={{ position: "absolute", right: -2, bottom: -2, width: 30, height: 30, borderRadius: 15, backgroundColor: colors.primary, alignItems: "center", justifyContent: "center", borderWidth: 3, borderColor: colors.bg }}>
+              <Ionicons name="camera" size={14} color={colors.onPrimary} />
             </View>
           </Pressable>
-          <View style={{ flex: 1, gap: 3 }}>
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-              <Text style={{ color: colors.ink, fontFamily: fonts.headingExtraBold, fontSize: 20 }}>{me.name}</Text>
-              {me.verified_identity && <Ionicons name="checkmark-circle" size={17} color={colors.green} />}
-            </View>
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-              <Stars value={me.rating} size={13} />
-              <Text style={{ color: colors.muted, fontSize: 13 }}>{me.rating} ({me.rating_count})</Text>
-            </View>
+
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: space.md }}>
+            <Text style={{ color: colors.ink, fontFamily: fonts.headingExtraBold, fontSize: 22 }}>{me.name}</Text>
+            {me.verified_identity && <Ionicons name="checkmark-circle" size={18} color={colors.green} />}
+          </View>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 5 }}>
+            <Stars value={me.rating} size={13} />
+            <Text style={{ color: colors.muted, fontSize: 13 }}>{me.rating} ({me.rating_count})</Text>
+          </View>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 4, marginTop: 5 }}>
+            <Ionicons name="location-outline" size={13} color={colors.faint} />
             <Text style={{ color: colors.muted, fontSize: 13 }}>{myHood?.name ? `${myHood.name} · ` : ""}{city?.name || "Parauapebas"}, PA</Text>
           </View>
-        </View>
-        <View style={{ flexDirection: "row", gap: 8, marginTop: 12 }}>
-          <View style={{ backgroundColor: colors.primarySoft, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 10 }}>
-            <Text style={{ color: colors.primary, fontSize: 12, fontWeight: "700" }}>{me.level}</Text>
-          </View>
-          <View style={{ backgroundColor: colors.alt, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 10 }}>
-            <Text style={{ color: colors.muted, fontSize: 12, fontWeight: "600" }}>{mode === "client" ? "Cliente" : "Fazedor"}</Text>
-          </View>
-        </View>
-        {me.bio ? <Text style={{ color: colors.muted, fontSize: 14, lineHeight: 20, marginTop: 12 }}>{me.bio}</Text> : null}
 
-        {/* Stats */}
-        <View style={{ flexDirection: "row", backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderRadius: 16, marginTop: 18, paddingVertical: 14 }}>
-          {[
-            { label: "Avaliação", value: String(me.rating) },
-            { label: "Serviços", value: String(me.jobs_done) },
-            { label: "Desde", value: String(memberSince) },
-          ].map((stat, i) => (
-            <View key={stat.label} style={{ flex: 1, alignItems: "center", gap: 2, borderLeftWidth: i ? 1 : 0, borderLeftColor: colors.border }}>
-              <Text style={{ color: colors.ink, fontSize: 17, fontWeight: "800" }}>{stat.value}</Text>
-              <Text style={{ color: colors.faint, fontSize: 12 }}>{stat.label}</Text>
+          <View style={{ flexDirection: "row", gap: 8, marginTop: space.md }}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: colors.primarySoft, paddingHorizontal: 10, paddingVertical: 6, borderRadius: radius.pill }}>
+              <Ionicons name="ribbon-outline" size={12} color={colors.primary} />
+              <Text style={{ color: colors.primary, fontFamily: fonts.bodyBold, fontSize: 12 }}>{me.level}</Text>
+            </View>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: colors.alt, paddingHorizontal: 10, paddingVertical: 6, borderRadius: radius.pill }}>
+              <Ionicons name={mode === "client" ? "person-outline" : "hammer-outline"} size={12} color={colors.muted} />
+              <Text style={{ color: colors.muted, fontFamily: fonts.bodySemiBold, fontSize: 12 }}>{mode === "client" ? "Cliente" : "Fazedor"}</Text>
+            </View>
+          </View>
+
+          {me.bio ? <Text style={{ color: colors.muted, fontSize: 14, lineHeight: 20, marginTop: space.md, textAlign: "center", paddingHorizontal: space.lg }}>{me.bio}</Text> : null}
+        </Animated.View>
+
+        {/* Stats — hairline dividers only, no card */}
+        <Animated.View entering={FadeInDown.delay(70).duration(280)} style={{ flexDirection: "row", justifyContent: "center", marginTop: space.xxl }}>
+          {stats.map((stat, i) => (
+            <View key={stat.label} style={{ alignItems: "center", paddingHorizontal: space.xl, borderLeftWidth: i ? 1 : 0, borderLeftColor: colors.border }}>
+              <Text style={{ color: colors.ink, fontFamily: fonts.headingExtraBold, fontSize: 19 }}>{stat.value}</Text>
+              <Text style={{ color: colors.faint, fontSize: 12, marginTop: 2 }}>{stat.label}</Text>
             </View>
           ))}
-        </View>
+        </Animated.View>
 
-        {/* Sections */}
-        <Section title="Minha conta">
-          <Row testID="edit-profile-row" icon="person-outline" label="Editar perfil" onPress={() => { setName(me.name); setBio(me.bio || ""); setEditOpen(true); }} />
-          <Row testID="location-row" icon="location-outline" label="Localização" value={myHood?.name || city?.name} onPress={() => { setCityId(me.city_id || city?.id || null); setHood(me.neighborhood_id || null); setLocationOpen(true); }} />
-          <Row testID="change-password-row" icon="lock-closed-outline" label="Alterar senha" onPress={() => { setCurrentPassword(""); setNewPassword(""); setConfirmPassword(""); setPasswordOpen(true); }} />
-          <Row icon="shield-checkmark-outline" label="Verificação" value={me.verified_identity ? "Identidade verificada" : "Pendente"} />
-        </Section>
+        {/* Sections — grouped by whitespace and a shared row style, not boxes */}
+        <Animated.View entering={FadeInDown.delay(120).duration(280)}>
+          <Section title="Minha conta">
+            <ProfileRow testID="edit-profile-row" icon="person-outline" label="Editar perfil" onPress={() => { setName(me.name); setBio(me.bio || ""); setEditOpen(true); }} />
+            <ProfileRow testID="location-row" icon="location-outline" label="Localização" value={myHood?.name || city?.name} onPress={() => { setCityId(me.city_id || city?.id || null); setHood(me.neighborhood_id || null); setLocationOpen(true); }} />
+            <ProfileRow testID="change-password-row" icon="lock-closed-outline" label="Alterar senha" onPress={() => { setCurrentPassword(""); setNewPassword(""); setConfirmPassword(""); setPasswordOpen(true); }} />
+            <ProfileRow icon="shield-checkmark-outline" label="Verificação" value={me.verified_identity ? "Identidade verificada" : "Pendente"} valueColor={me.verified_identity ? colors.green : undefined} />
+          </Section>
+        </Animated.View>
 
-        <Section title="Financeiro">
-          <Row testID="wallet-row" icon="wallet-outline" label="Minha carteira" onPress={() => router.push("/wallet")} />
-          <Row testID="security-row" icon="shield-outline" label="Segurança" onPress={() => router.push("/security")} />
-        </Section>
+        <Animated.View entering={FadeInDown.delay(160).duration(280)}>
+          <Section title="Financeiro">
+            <ProfileRow testID="wallet-row" icon="wallet-outline" label="fazumPay" value="Minha carteira" onPress={() => router.push("/wallet")} />
+          </Section>
+        </Animated.View>
 
-        <Section title="Minha atividade">
-          <Row testID="my-orders-row" icon="document-text-outline" label="Meus pedidos" onPress={() => router.push({ pathname: "/activity", params: { tab: "orders" } })} />
-          <Row icon="construct-outline" label="Meus serviços" onPress={() => router.push({ pathname: "/activity", params: { tab: "jobs" } })} />
-          <Row icon="heart-outline" label="Favoritos" onPress={() => router.push({ pathname: "/activity", params: { tab: "favorites" } })} />
-          <Row icon="star-outline" label="Avaliações" onPress={() => router.push({ pathname: "/activity", params: { tab: "reviews" } })} />
-        </Section>
-
-        <Section title="Preferências">
-          <View style={{ paddingVertical: 10, gap: 10 }}>
-            <Text style={{ color: colors.ink, fontSize: 15, fontWeight: "500" }}>Aparência</Text>
-            <Segmented<ThemePref>
-              options={[{ key: "light", label: "Claro" }, { key: "dark", label: "Escuro" }, { key: "system", label: "Sistema" }]}
-              value={pref}
-              onChange={setPref}
-            />
-          </View>
-        </Section>
-
-        <Section title="Ajuda">
-          <Row testID="report-problem-row" icon="flag-outline" label="Denunciar problema" onPress={() => setReportOpen(true)} />
-          {me.is_admin && <Row testID="admin-row" icon="settings-outline" label="Administração" onPress={() => router.push("/admin")} />}
-          <Row testID="logout-row" icon="log-out-outline" label="Sair" danger onPress={doLogout} />
-          <Row testID="delete-account-row" icon="trash-outline" label="Excluir conta" danger onPress={confirmDeleteAccount} />
-        </Section>
+        <Animated.View entering={FadeInDown.delay(200).duration(280)}>
+          <Section title="Minha atividade">
+            <ProfileRow testID="my-orders-row" icon="document-text-outline" label="Meus pedidos" onPress={() => router.push({ pathname: "/activity", params: { tab: "orders" } })} />
+            <ProfileRow icon="construct-outline" label="Meus serviços" onPress={() => router.push({ pathname: "/activity", params: { tab: "jobs" } })} />
+            <ProfileRow icon="heart-outline" label="Favoritos" onPress={() => router.push({ pathname: "/activity", params: { tab: "favorites" } })} />
+            <ProfileRow icon="star-outline" label="Avaliações" onPress={() => router.push({ pathname: "/activity", params: { tab: "reviews" } })} />
+          </Section>
+        </Animated.View>
       </ScrollView>
 
       {/* Edit profile */}
@@ -253,23 +241,41 @@ export default function Profile() {
         </View>
       </Sheet>
 
-      {/* Report */}
-      <Sheet visible={reportOpen} onClose={() => setReportOpen(false)} title="Denunciar problema">
-        <View style={{ gap: 14, paddingVertical: 12, paddingBottom: 24 }}>
-          <Field label="O que aconteceu?" value={reportText} onChangeText={setReportText} multiline style={{ minHeight: 110, textAlignVertical: "top" }} placeholder="Descreva o problema..." testID="report-input" />
-          <Btn title="Enviar" onPress={sendReport} loading={saving} disabled={!reportText.trim()} testID="send-report-button" />
-        </View>
-      </Sheet>
+      <AvatarCropModal visible={!!cropUri} uri={cropUri} onCancel={() => setCropUri(null)} onConfirm={confirmAvatarCrop} />
     </View>
   );
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   const { colors } = useTheme();
+  const items = React.Children.toArray(children);
   return (
-    <View style={{ marginTop: 26 }}>
-      <Text style={{ color: colors.faint, fontFamily: fonts.bodyBold, fontSize: 12, textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 }}>{title}</Text>
-      <View>{children}</View>
+    <View style={{ marginTop: space.xxl }}>
+      <Text style={{ color: colors.faint, fontFamily: fonts.bodyBold, fontSize: 12, textTransform: "uppercase", letterSpacing: 1, marginBottom: space.sm }}>{title}</Text>
+      <View>
+        {items.map((child, i) => (
+          <React.Fragment key={i}>
+            {i > 0 && <View style={{ height: 1, backgroundColor: colors.border, marginLeft: 34 + space.md }} />}
+            {child}
+          </React.Fragment>
+        ))}
+      </View>
     </View>
+  );
+}
+
+function ProfileRow({ icon, label, value, valueColor, onPress, danger, testID }: {
+  icon: Icon; label: string; value?: string; valueColor?: string; onPress?: () => void; danger?: boolean; testID?: string;
+}) {
+  const { colors } = useTheme();
+  return (
+    <Pressable testID={testID} onPress={onPress} disabled={!onPress} style={({ pressed }) => [{ flexDirection: "row", alignItems: "center", gap: space.md, minHeight: 56, opacity: pressed ? 0.6 : 1 }]}>
+      <View style={{ width: 34, height: 34, borderRadius: 17, backgroundColor: danger ? colors.dangerSoft : colors.alt, alignItems: "center", justifyContent: "center" }}>
+        <Ionicons name={icon} size={16} color={danger ? colors.danger : colors.muted} />
+      </View>
+      <Text style={{ flex: 1, color: danger ? colors.danger : colors.ink, fontFamily: fonts.bodyMedium, fontSize: 15 }}>{label}</Text>
+      {value ? <Text style={{ color: valueColor || colors.faint, fontFamily: fonts.bodyMedium, fontSize: 13 }}>{value}</Text> : null}
+      {onPress ? <Ionicons name="chevron-forward" size={16} color={colors.faint} /> : null}
+    </Pressable>
   );
 }

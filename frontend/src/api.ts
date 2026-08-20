@@ -68,9 +68,10 @@ export type Order = {
   status: string; status_label: string; client_id: string; worker_id?: string;
   client?: User; worker?: User; proposals_count: number; fields: Record<string, string>;
   accepted_amount?: number; reviewed_by_client: boolean; reviewed_by_worker: boolean; created_at: string;
+  urgent: boolean; recurrence: "none" | "weekly" | "biweekly" | "monthly";
 };
 export type Proposal = { id: string; order_id: string; worker_id: string; amount: number; message: string; eta: string; status: string; worker?: User };
-export type Message = { id: string; order_id: string; sender_id: string; type: "text" | "system" | "image"; text: string; image_b64?: string; created_at: string };
+export type Message = { id: string; order_id: string; sender_id: string; type: "text" | "system" | "image"; text: string; image_b64?: string; created_at: string; warning?: string };
 
 export type Wallet = { available: number; pending: number; processing: number; total_received: number; total_spent: number; currency: string };
 export type WalletTransaction = {

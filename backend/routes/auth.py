@@ -10,9 +10,10 @@ from auth import (
 )
 from database import db, new_id, now
 from models import (
-    ChangePasswordIn, ForgotPasswordIn, GoogleAuthIn, LoginIn, PreferenceIn, RegisterIn,
-    ResetPasswordIn, VerifyEmailIn,
+    ChangePasswordIn, ForgotPasswordIn, GoogleAuthIn, LoginIn, NotificationPrefsIn, PreferenceIn,
+    RegisterIn, ResetPasswordIn, VerifyEmailIn,
 )
+from security_events import log_security_event
 
 router = APIRouter(prefix="/auth")
 
@@ -31,7 +32,7 @@ def public_me(user: dict) -> dict:
 
 @router.post("/register")
 async def register(body: RegisterIn, request: Request):
-    rate_limit(f"register:{request.client.host if request.client else 'unknown'}")
+    rate_limit(f"register:{request.client.host if request.client else 'unknown'}", max_attempts=40, window_seconds=300)
     email = body.email.lower()
     if await db.users.find_one({"email": email}):
         raise HTTPException(400, "Já existe uma conta com este e-mail.")
@@ -47,18 +48,22 @@ async def register(body: RegisterIn, request: Request):
         "created_at": now(),
     }
     await db.users.insert_one(dict(user))
-    return {"token": create_token(user["id"]), "user": public_me(user)}
+    return {"token": create_token(user["id"], user.get("token_version", 0)), "user": public_me(user)}
 
 
 @router.post("/login")
 async def login(body: LoginIn, request: Request):
-    rate_limit(f"login:{request.client.host if request.client else 'unknown'}:{body.email.lower()}")
+    ip = request.client.host if request.client else "unknown"
+    rate_limit(f"login:{ip}:{body.email.lower()}")
     user = await db.users.find_one({"email": body.email.lower()})
     if not user or not user.get("password_hash") or not verify_password(body.password, user["password_hash"]):
         raise HTTPException(401, "E-mail ou senha incorretos.")
     if user.get("blocked"):
         raise HTTPException(403, "Sua conta está bloqueada. Fale com o suporte.")
-    return {"token": create_token(user["id"]), "user": public_me(user)}
+    await log_security_event(user["id"], "login", ip=ip)
+    from routes.public import notify
+    await notify(user["id"], "Novo login detectado", "Se não foi você, altere sua senha imediatamente.", "security")
+    return {"token": create_token(user["id"], user.get("token_version", 0)), "user": public_me(user)}
 
 
 @router.post("/google")
@@ -93,7 +98,7 @@ async def google_auth(body: GoogleAuthIn, request: Request):
             "created_at": now(),
         }
         await db.users.insert_one(dict(user))
-    return {"token": create_token(user["id"]), "user": public_me(user)}
+    return {"token": create_token(user["id"], user.get("token_version", 0)), "user": public_me(user)}
 
 
 @router.post("/forgot-password")
@@ -124,10 +129,14 @@ async def reset_password(body: ResetPasswordIn, request: Request):
         raise HTTPException(400, "Esse código expirou. Solicite um novo.")
     if not verify_password(body.code, user["password_reset_code_hash"]):
         raise HTTPException(400, "Código incorreto.")
+    # Bump token_version so any session an attacker held before this reset — the exact
+    # scenario forgot-password recovery exists to defend against — stops working immediately.
     await db.users.update_one({"id": user["id"]}, {
         "$set": {"password_hash": hash_password(body.password)},
         "$unset": {"password_reset_code_hash": "", "password_reset_expires": ""},
+        "$inc": {"token_version": 1},
     })
+    await log_security_event(user["id"], "password_reset", ip=request.client.host if request.client else None)
     return {"message": "Senha alterada com sucesso."}
 
 
@@ -166,11 +175,14 @@ async def verify_email(body: VerifyEmailIn, user: dict = Depends(get_current_use
 
 
 @router.post("/change-password")
-async def change_password(body: ChangePasswordIn, user: dict = Depends(get_current_user)):
+async def change_password(body: ChangePasswordIn, request: Request, user: dict = Depends(get_current_user)):
     rate_limit(f"change-password:{user['id']}")
     if not verify_password(body.current_password, user.get("password_hash") or ""):
         raise HTTPException(401, "Senha atual incorreta.")
-    await db.users.update_one({"id": user["id"]}, {"$set": {"password_hash": hash_password(body.new_password)}})
+    # Bump token_version too: a password change is exactly the moment a user wants every
+    # OTHER session (including a possibly-compromised one) to stop working right away.
+    await db.users.update_one({"id": user["id"]}, {"$set": {"password_hash": hash_password(body.new_password)}, "$inc": {"token_version": 1}})
+    await log_security_event(user["id"], "password_change", ip=request.client.host if request.client else None)
     await db.notifications.insert_one({
         "id": new_id(), "user_id": user["id"], "title": "Senha alterada",
         "body": "Sua senha foi alterada. Se não foi você, entre em contato com o suporte.",
@@ -197,6 +209,17 @@ async def set_preference(body: PreferenceIn, user: dict = Depends(get_current_us
     await db.users.update_one({"id": user["id"]}, {"$set": {"preference": body.preference}})
     user["preference"] = body.preference
     return public_me(user)
+
+
+@router.get("/notification-prefs")
+async def get_notification_prefs(user: dict = Depends(get_current_user)):
+    return {"prefs": user.get("notification_prefs") or {}}
+
+
+@router.patch("/notification-prefs")
+async def set_notification_prefs(body: NotificationPrefsIn, user: dict = Depends(get_current_user)):
+    await db.users.update_one({"id": user["id"]}, {"$set": {"notification_prefs": body.prefs}})
+    return {"prefs": body.prefs}
 
 
 @router.get("/me")

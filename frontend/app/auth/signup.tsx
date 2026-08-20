@@ -10,6 +10,7 @@ import { useAuth } from "@/src/auth";
 import { Btn, Chip, Field } from "@/src/components/ui";
 import { fonts } from "@/src/hooks/use-app-fonts";
 import { extractIdToken, useGoogleAuth } from "@/src/hooks/use-google-auth";
+import { useBreakpoint } from "@/src/hooks/use-breakpoint";
 import { radius, space, type, useTheme } from "@/src/theme";
 import { safeBack } from "@/src/utils/navigation";
 
@@ -38,6 +39,7 @@ export default function Signup() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const google = useGoogleAuth();
+  const { isDesktop } = useBreakpoint();
 
   const [step, setStep] = useState(0);
   const [firstName, setFirstName] = useState("");
@@ -170,8 +172,13 @@ export default function Signup() {
   }
 
   return (
-    <View style={{ flex: 1, backgroundColor: colors.bg, paddingTop: Platform.OS === "ios" ? 12 : insets.top + 8 }}>
-      <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: space.xl, height: 48, gap: space.lg }}>
+    <View style={{ flex: 1, backgroundColor: colors.bg, alignItems: isDesktop ? "center" : undefined, justifyContent: isDesktop ? "center" : undefined, padding: isDesktop ? space.xxxl : 0 }}>
+    <View style={
+      isDesktop
+        ? { width: "100%", maxWidth: 560, maxHeight: 680, backgroundColor: colors.surface, borderRadius: radius.xl, borderWidth: 1, borderColor: colors.border, overflow: "hidden" }
+        : { flex: 1, paddingTop: Platform.OS === "ios" ? 12 : insets.top + 8 }
+    }>
+      <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: space.xl, height: 48, gap: space.lg, marginTop: isDesktop ? space.lg : 0 }}>
         <Pressable testID="signup-back-button" onPress={back} hitSlop={10}>
           <Ionicons name={step === 0 ? "close" : "arrow-back"} size={24} color={colors.ink} />
         </Pressable>
@@ -321,7 +328,7 @@ export default function Signup() {
           )}
         </ScrollView>
 
-        <View style={{ flexDirection: "row", gap: space.md, paddingHorizontal: space.xl, paddingTop: space.md, paddingBottom: Math.max(insets.bottom, space.lg), borderTopWidth: 1, borderTopColor: colors.border, backgroundColor: colors.bg }}>
+        <View style={{ flexDirection: "row", gap: space.md, paddingHorizontal: space.xl, paddingTop: space.md, paddingBottom: isDesktop ? space.lg : Math.max(insets.bottom, space.lg), borderTopWidth: 1, borderTopColor: colors.border, backgroundColor: isDesktop ? colors.surface : colors.bg }}>
           <View style={{ flex: 1 }}>
             <Btn title={step === 0 ? "Cancelar" : "Voltar"} variant="ghost" onPress={back} />
           </View>
@@ -337,6 +344,7 @@ export default function Signup() {
           </View>
         </View>
       </KeyboardAvoidingView>
+    </View>
     </View>
   );
 }

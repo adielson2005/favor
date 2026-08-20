@@ -295,7 +295,7 @@ def test_report_create(api, created_order, client_token):
     r = api.post(f"{BASE_URL}/api/reports", json={
         "target_type": "order", "target_id": created_order["id"], "reason": "spam",
         "details": f"{TAG} regression report"}, headers=auth(client_token), timeout=10)
-    assert r.status_code == 200 and r.json()["status"] == "open"
+    assert r.status_code == 200 and r.json()["status"] == "OPEN"
     pytest.report_id = r.json()["id"]
 
 
@@ -350,7 +350,7 @@ def test_admin_geo_toggle(api, admin_token):
 
 
 def test_admin_reports_resolve(api, admin_token):
-    r = api.post(f"{BASE_URL}/api/admin/reports/{pytest.report_id}/resolve", headers=auth(admin_token), timeout=10)
+    r = api.patch(f"{BASE_URL}/api/admin/reports/{pytest.report_id}", json={"status": "RESOLVED", "resolution": "ok"}, headers=auth(admin_token), timeout=10)
     assert r.status_code == 200
 
 

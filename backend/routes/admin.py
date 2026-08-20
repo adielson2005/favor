@@ -1,16 +1,16 @@
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 
-from auth import get_current_admin
+from auth import get_current_admin, rate_limit
 from database import db, new_id, now
 from models import (
-    ActivePatch, AdminAdjustmentIn, AdminDisputeActionIn, AdminWithdrawalActionIn,
-    CategoryIn, CommissionConfigIn, GeoCityIn, GeoNeighborhoodIn, GeoStateIn, SubcategoryIn,
+    ActivePatch, AdminAdjustmentIn, AdminDisputeActionIn, AdminReportActionIn, AdminRiskFlagActionIn,
+    AdminWithdrawalActionIn, CategoryIn, CommissionConfigIn, GeoCityIn, GeoNeighborhoodIn, GeoStateIn, SubcategoryIn,
 )
 from wallet import (
-    InsufficientFundsError, credit_wallet, debit_wallet, get_commission_config,
-    move_bucket, to_cents, wallet_public,
+    PLATFORM_WALLET_USER_ID, InsufficientFundsError, credit_wallet, debit_wallet,
+    get_commission_config, move_bucket, to_cents, wallet_public,
 )
 
 router = APIRouter(prefix="/admin")
@@ -21,6 +21,9 @@ async def log_action(admin_id: str, action: str, target: str):
 
 
 async def notify(user_id: str, title: str, body: str, kind: str, order_id: Optional[str] = None):
+    user = await db.users.find_one({"id": user_id}, {"notification_prefs": 1})
+    if user and (user.get("notification_prefs") or {}).get(kind) is False:
+        return
     await db.notifications.insert_one({"id": new_id(), "user_id": user_id, "title": title, "body": body, "type": kind, "order_id": order_id, "read": False, "created_at": now()})
 
 
@@ -32,7 +35,8 @@ async def overview(admin=Depends(get_current_admin)):
         "orders_open": await db.orders.count_documents({"status": "published"}),
         "proposals": await db.proposals.count_documents({}),
         "reviews": await db.reviews.count_documents({}),
-        "reports_open": await db.reports.count_documents({"status": "open"}),
+        "reports_open": await db.reports.count_documents({"status": "OPEN"}),
+        "risk_flags_open": await db.risk_flags.count_documents({"status": "OPEN"}),
         "categories": await db.categories.count_documents({}),
         "neighborhoods": await db.neighborhoods.count_documents({}),
     }
@@ -41,12 +45,13 @@ async def overview(admin=Depends(get_current_admin)):
 # ---------- users ----------
 
 @router.get("/users")
-async def users(admin=Depends(get_current_admin)):
-    return await db.users.find({}, {"_id": 0, "password_hash": 0}).to_list(200)
+async def users(limit: int = 200, offset: int = 0, admin=Depends(get_current_admin)):
+    return await db.users.find({}, {"_id": 0, "password_hash": 0}).skip(max(offset, 0)).to_list(min(limit, 500))
 
 
 @router.post("/users/{user_id}/block")
 async def toggle_block_user(user_id: str, admin=Depends(get_current_admin)):
+    rate_limit(f"admin-block-user:{admin['id']}", max_attempts=60, window_seconds=300)
     user = await db.users.find_one({"id": user_id})
     if not user:
         raise HTTPException(404, "Usuário não encontrado")
@@ -56,8 +61,21 @@ async def toggle_block_user(user_id: str, admin=Depends(get_current_admin)):
     return {"blocked": blocked}
 
 
+@router.post("/users/{user_id}/revoke-sessions")
+async def revoke_user_sessions(user_id: str, admin=Depends(get_current_admin)):
+    rate_limit(f"admin-revoke-sessions:{admin['id']}", max_attempts=60, window_seconds=300)
+    user = await db.users.find_one({"id": user_id})
+    if not user:
+        raise HTTPException(404, "Usuário não encontrado")
+    await db.users.update_one({"id": user_id}, {"$inc": {"token_version": 1}})
+    await log_action(admin["id"], "revoke_sessions", f"user:{user_id}")
+    await notify(user_id, "Sessões encerradas", "Por segurança, encerramos seus acessos ativos. Entre novamente.", "security")
+    return {"message": "Sessões encerradas."}
+
+
 @router.post("/users/{user_id}/verify")
 async def toggle_verify_user(user_id: str, admin=Depends(get_current_admin)):
+    rate_limit(f"admin-verify-user:{admin['id']}", max_attempts=60, window_seconds=300)
     user = await db.users.find_one({"id": user_id})
     if not user:
         raise HTTPException(404, "Usuário não encontrado")
@@ -70,13 +88,36 @@ async def toggle_verify_user(user_id: str, admin=Depends(get_current_admin)):
 # ---------- orders ----------
 
 @router.get("/orders")
-async def orders(admin=Depends(get_current_admin)):
-    return await db.orders.find({}, {"_id": 0}).sort("created_at", -1).to_list(200)
+async def orders(limit: int = 200, offset: int = 0, admin=Depends(get_current_admin)):
+    return await db.orders.find({}, {"_id": 0}).sort("created_at", -1).skip(max(offset, 0)).to_list(min(limit, 500))
 
 
 @router.post("/orders/{order_id}/cancel")
 async def cancel_order(order_id: str, admin=Depends(get_current_admin)):
-    await db.orders.update_one({"id": order_id}, {"$set": {"status": "cancelled"}})
+    rate_limit(f"admin-cancel-order:{admin['id']}", max_attempts=30, window_seconds=600)
+    # Atomic claim, same guard style used everywhere else in the order lifecycle —
+    # admin can reach further into the lifecycle than a client can (fraud response
+    # shouldn't be blocked by "well the client already started work"), but a
+    # completed/already-cancelled/disputed order still can't be touched here.
+    order = await db.orders.find_one_and_update(
+        {"id": order_id, "status": {"$in": ["published", "accepted", "in_progress", "completion_requested"]}},
+        {"$set": {"status": "cancelled", "cancelled_at": now()}},
+    )
+    if not order:
+        raise HTTPException(400, "Este pedido não pode mais ser cancelado")
+    if order.get("worker_id"):
+        await notify(order["worker_id"], "Pedido cancelado", f"“{order['title']}” foi cancelado pela administração.", "status", order_id)
+    await notify(order["client_id"], "Pedido cancelado", f"“{order['title']}” foi cancelado pela administração.", "status", order_id)
+    # Reuses the exact refund pattern from the client-initiated cancel (public.py) —
+    # a held payment always comes back to the client, admin cancel is no exception.
+    payment = await db.payments.find_one({"order_id": order_id, "status": "held"})
+    if payment:
+        refund_cents = to_cents(payment["gross_amount"])
+        if refund_cents > 0:
+            await credit_wallet(payment["client_id"], refund_cents, "REFUND", reference_type="order", reference_id=order_id,
+                                 bucket="available", description=f"Reembolso — {order['title']} (cancelado pela administração)")
+        await db.payments.update_one({"id": payment["id"]}, {"$set": {"status": "refunded", "updated_at": now()}})
+        await notify(payment["client_id"], "Reembolso realizado", f"O valor pago em “{order['title']}” foi devolvido para sua carteira.", "refund", order_id)
     await log_action(admin["id"], "cancel", f"order:{order_id}")
     return {"ok": True}
 
@@ -94,6 +135,7 @@ async def categories(admin=Depends(get_current_admin)):
 
 @router.post("/categories")
 async def create_category(body: CategoryIn, admin=Depends(get_current_admin)):
+    rate_limit(f"admin-catalog:{admin['id']}", max_attempts=60, window_seconds=300)
     order = await db.categories.count_documents({})
     cat = body.model_dump() | {"id": new_id(), "order": order}
     await db.categories.insert_one(dict(cat))
@@ -103,6 +145,7 @@ async def create_category(body: CategoryIn, admin=Depends(get_current_admin)):
 
 @router.patch("/categories/{cat_id}")
 async def patch_category(cat_id: str, body: ActivePatch, admin=Depends(get_current_admin)):
+    rate_limit(f"admin-catalog:{admin['id']}", max_attempts=60, window_seconds=300)
     data = {k: v for k, v in body.model_dump().items() if v is not None}
     await db.categories.update_one({"id": cat_id}, {"$set": data})
     await log_action(admin["id"], "update", f"category:{cat_id}")
@@ -111,6 +154,7 @@ async def patch_category(cat_id: str, body: ActivePatch, admin=Depends(get_curre
 
 @router.post("/subcategories")
 async def create_subcategory(body: SubcategoryIn, admin=Depends(get_current_admin)):
+    rate_limit(f"admin-catalog:{admin['id']}", max_attempts=60, window_seconds=300)
     sub = body.model_dump() | {"id": new_id()}
     await db.subcategories.insert_one(dict(sub))
     await log_action(admin["id"], "create", f"subcategory:{sub['id']}")
@@ -119,8 +163,10 @@ async def create_subcategory(body: SubcategoryIn, admin=Depends(get_current_admi
 
 @router.patch("/subcategories/{sub_id}")
 async def patch_subcategory(sub_id: str, body: ActivePatch, admin=Depends(get_current_admin)):
+    rate_limit(f"admin-catalog:{admin['id']}", max_attempts=60, window_seconds=300)
     data = {k: v for k, v in body.model_dump().items() if v is not None}
     await db.subcategories.update_one({"id": sub_id}, {"$set": data})
+    await log_action(admin["id"], "update", f"subcategory:{sub_id}")
     return {"ok": True}
 
 
@@ -137,6 +183,7 @@ async def geo(admin=Depends(get_current_admin)):
 
 @router.post("/geo/states")
 async def create_state(body: GeoStateIn, admin=Depends(get_current_admin)):
+    rate_limit(f"admin-geo:{admin['id']}", max_attempts=60, window_seconds=300)
     state = body.model_dump() | {"id": new_id()}
     await db.states.insert_one(dict(state))
     await log_action(admin["id"], "create", f"state:{state['id']}")
@@ -145,6 +192,7 @@ async def create_state(body: GeoStateIn, admin=Depends(get_current_admin)):
 
 @router.post("/geo/cities")
 async def create_city(body: GeoCityIn, admin=Depends(get_current_admin)):
+    rate_limit(f"admin-geo:{admin['id']}", max_attempts=60, window_seconds=300)
     city = body.model_dump() | {"id": new_id()}
     await db.cities.insert_one(dict(city))
     await log_action(admin["id"], "create", f"city:{city['id']}")
@@ -153,6 +201,7 @@ async def create_city(body: GeoCityIn, admin=Depends(get_current_admin)):
 
 @router.post("/geo/neighborhoods")
 async def create_neighborhood(body: GeoNeighborhoodIn, admin=Depends(get_current_admin)):
+    rate_limit(f"admin-geo:{admin['id']}", max_attempts=60, window_seconds=300)
     hood = body.model_dump() | {"id": new_id()}
     await db.neighborhoods.insert_one(dict(hood))
     await log_action(admin["id"], "create", f"neighborhood:{hood['id']}")
@@ -161,6 +210,7 @@ async def create_neighborhood(body: GeoNeighborhoodIn, admin=Depends(get_current
 
 @router.patch("/geo/{kind}/{item_id}")
 async def patch_geo(kind: str, item_id: str, body: ActivePatch, admin=Depends(get_current_admin)):
+    rate_limit(f"admin-geo:{admin['id']}", max_attempts=60, window_seconds=300)
     coll = {"states": db.states, "cities": db.cities, "neighborhoods": db.neighborhoods}.get(kind)
     if coll is None:
         raise HTTPException(400, "Tipo inválido")
@@ -173,17 +223,47 @@ async def patch_geo(kind: str, item_id: str, body: ActivePatch, admin=Depends(ge
 # ---------- reports ----------
 
 @router.get("/reports")
-async def reports(admin=Depends(get_current_admin)):
-    items = await db.reports.find({}, {"_id": 0}).sort("created_at", -1).to_list(200)
+async def reports(limit: int = 200, offset: int = 0, admin=Depends(get_current_admin)):
+    items = await db.reports.find({}, {"_id": 0}).sort("created_at", -1).skip(max(offset, 0)).to_list(min(limit, 500))
     reporter_ids = list({r["reporter_id"] for r in items})
     users = {u["id"]: u.get("name") async for u in db.users.find({"id": {"$in": reporter_ids}})}
     return [r | {"reporter_name": users.get(r["reporter_id"], "—")} for r in items]
 
 
-@router.post("/reports/{report_id}/resolve")
-async def resolve_report(report_id: str, admin=Depends(get_current_admin)):
-    await db.reports.update_one({"id": report_id}, {"$set": {"status": "resolved", "resolved_at": now()}})
-    await log_action(admin["id"], "resolve", f"report:{report_id}")
+@router.patch("/reports/{report_id}")
+async def admin_update_report(report_id: str, body: AdminReportActionIn, admin=Depends(get_current_admin)):
+    rate_limit(f"admin-update-report:{admin['id']}", max_attempts=30, window_seconds=600)
+    if body.status not in ("UNDER_REVIEW", "RESOLVED", "REJECTED"):
+        raise HTTPException(400, "Status inválido.")
+    report = await db.reports.find_one({"id": report_id})
+    if not report:
+        raise HTTPException(404, "Denúncia não encontrada")
+    await db.reports.update_one({"id": report_id}, {"$set": {"status": body.status, "resolution": body.resolution, "updated_at": now()}})
+    await log_action(admin["id"], "update_report", f"report:{report_id}:{body.status}")
+    return {"ok": True}
+
+
+# ---------- risk ----------
+
+@router.get("/risk-flags")
+async def admin_list_risk_flags(status: Optional[str] = None, limit: int = 200, offset: int = 0, admin=Depends(get_current_admin)):
+    query = {"status": status} if status else {}
+    items = await db.risk_flags.find(query, {"_id": 0}).sort("created_at", -1).skip(max(offset, 0)).to_list(min(limit, 500))
+    user_ids = list({f["user_id"] for f in items})
+    users = {u["id"]: u.get("name") async for u in db.users.find({"id": {"$in": user_ids}})}
+    return [f | {"user_name": users.get(f["user_id"], "—")} for f in items]
+
+
+@router.patch("/risk-flags/{flag_id}")
+async def admin_update_risk_flag(flag_id: str, body: AdminRiskFlagActionIn, admin=Depends(get_current_admin)):
+    rate_limit(f"admin-update-risk-flag:{admin['id']}", max_attempts=60, window_seconds=300)
+    if body.status not in ("RESOLVED", "DISMISSED"):
+        raise HTTPException(400, "Status inválido.")
+    flag = await db.risk_flags.find_one({"id": flag_id})
+    if not flag:
+        raise HTTPException(404, "Sinalização não encontrada")
+    await db.risk_flags.update_one({"id": flag_id}, {"$set": {"status": body.status, "note": body.note, "updated_at": now()}})
+    await log_action(admin["id"], "update_risk_flag", f"risk_flag:{flag_id}:{body.status}")
     return {"ok": True}
 
 
@@ -196,15 +276,19 @@ async def admin_get_wallet(user_id: str, admin=Depends(get_current_admin)):
 
 
 @router.post("/wallets/{user_id}/adjust")
-async def admin_adjust_wallet(user_id: str, body: AdminAdjustmentIn, admin=Depends(get_current_admin)):
+async def admin_adjust_wallet(user_id: str, body: AdminAdjustmentIn, admin=Depends(get_current_admin),
+                               idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key")):
+    rate_limit(f"admin-wallet-adjust:{admin['id']}", max_attempts=60, window_seconds=600)
     if body.amount == 0:
         raise HTTPException(400, "Informe um valor diferente de zero.")
     cents = to_cents(abs(body.amount))
     if body.amount > 0:
-        txn = await credit_wallet(user_id, cents, "ADJUSTMENT", reference_type="admin_adjustment", reference_id=admin["id"], description=body.reason)
+        txn = await credit_wallet(user_id, cents, "ADJUSTMENT", reference_type="admin_adjustment", reference_id=admin["id"],
+                                   description=body.reason, idempotency_key=idempotency_key)
     else:
         try:
-            txn = await debit_wallet(user_id, cents, "ADJUSTMENT", reference_type="admin_adjustment", reference_id=admin["id"], description=body.reason)
+            txn = await debit_wallet(user_id, cents, "ADJUSTMENT", reference_type="admin_adjustment", reference_id=admin["id"],
+                                      description=body.reason, idempotency_key=idempotency_key)
         except InsufficientFundsError:
             raise HTTPException(400, "Saldo disponível insuficiente para esse ajuste.")
     await log_action(admin["id"], "wallet_adjustment", f"user:{user_id}:{body.amount:+.2f}:{body.reason}")
@@ -220,16 +304,20 @@ async def admin_list_withdrawals(status: Optional[str] = None, admin=Depends(get
 
 @router.post("/withdrawals/{withdrawal_id}/approve")
 async def admin_approve_withdrawal(withdrawal_id: str, admin=Depends(get_current_admin)):
-    withdrawal = await db.withdrawals.find_one({"id": withdrawal_id})
+    rate_limit(f"admin-withdrawal-action:{admin['id']}", max_attempts=30, window_seconds=600)
+    # Atomic claim first — a double-click or two admins approving the same withdrawal
+    # concurrently can only have one of them actually flip PENDING/REVIEW_REQUIRED ->
+    # COMPLETED; the debit below only ever runs once, for whichever request wins.
+    withdrawal = await db.withdrawals.find_one_and_update(
+        {"id": withdrawal_id, "status": {"$in": ["PENDING", "REVIEW_REQUIRED"]}},
+        {"$set": {"status": "COMPLETED", "updated_at": now()}},
+    )
     if not withdrawal:
-        raise HTTPException(404, "Saque não encontrado")
-    if withdrawal["status"] not in ("PENDING", "REVIEW_REQUIRED"):
         raise HTTPException(400, "Esse saque não pode mais ser aprovado")
     # Funds are already held in the "processing" bucket since the request was made —
     # approving means they leave the wallet for good (paid out), never returning to available.
     await debit_wallet(withdrawal["user_id"], to_cents(withdrawal["amount"]), "WITHDRAWAL", reference_type="withdrawal",
                         reference_id=withdrawal_id, bucket="processing", description="Saque aprovado", count_as_spent=False)
-    await db.withdrawals.update_one({"id": withdrawal_id}, {"$set": {"status": "COMPLETED", "updated_at": now()}})
     await notify(withdrawal["user_id"], "Saque concluído", f"Seu saque de R$ {withdrawal['amount']:.2f} foi concluído.", "withdrawal")
     await log_action(admin["id"], "approve_withdrawal", f"withdrawal:{withdrawal_id}")
     return {"ok": True, "status": "COMPLETED"}
@@ -237,50 +325,90 @@ async def admin_approve_withdrawal(withdrawal_id: str, admin=Depends(get_current
 
 @router.post("/withdrawals/{withdrawal_id}/reject")
 async def admin_reject_withdrawal(withdrawal_id: str, body: AdminWithdrawalActionIn, admin=Depends(get_current_admin)):
-    withdrawal = await db.withdrawals.find_one({"id": withdrawal_id})
+    rate_limit(f"admin-withdrawal-action:{admin['id']}", max_attempts=30, window_seconds=600)
+    withdrawal = await db.withdrawals.find_one_and_update(
+        {"id": withdrawal_id, "status": {"$in": ["PENDING", "REVIEW_REQUIRED"]}},
+        {"$set": {"status": "FAILED", "reason": body.reason, "updated_at": now()}},
+    )
     if not withdrawal:
-        raise HTTPException(404, "Saque não encontrado")
-    if withdrawal["status"] not in ("PENDING", "REVIEW_REQUIRED"):
         raise HTTPException(400, "Esse saque não pode mais ser recusado")
     await move_bucket(withdrawal["user_id"], to_cents(withdrawal["amount"]), "processing", "available", "WITHDRAWAL",
                        reference_type="withdrawal", reference_id=withdrawal_id, description=f"Saque recusado: {body.reason}")
-    await db.withdrawals.update_one({"id": withdrawal_id}, {"$set": {"status": "FAILED", "reason": body.reason, "updated_at": now()}})
     await notify(withdrawal["user_id"], "Saque recusado", f"Seu saque de R$ {withdrawal['amount']:.2f} foi recusado. {body.reason}", "withdrawal")
     await log_action(admin["id"], "reject_withdrawal", f"withdrawal:{withdrawal_id}:{body.reason}")
     return {"ok": True, "status": "FAILED"}
 
 
 @router.get("/payments")
-async def admin_list_payments(admin=Depends(get_current_admin)):
-    return await db.payments.find({}, {"_id": 0}).sort("created_at", -1).to_list(200)
+async def admin_list_payments(limit: int = 200, offset: int = 0, admin=Depends(get_current_admin)):
+    return await db.payments.find({}, {"_id": 0}).sort("created_at", -1).skip(max(offset, 0)).to_list(min(limit, 500))
 
 
 @router.get("/disputes")
-async def admin_list_disputes(status: Optional[str] = None, admin=Depends(get_current_admin)):
+async def admin_list_disputes(status: Optional[str] = None, limit: int = 200, offset: int = 0, admin=Depends(get_current_admin)):
     query = {"status": status} if status else {}
-    items = await db.disputes.find(query, {"_id": 0}).sort("created_at", -1).to_list(200)
+    items = await db.disputes.find(query, {"_id": 0}).sort("created_at", -1).skip(max(offset, 0)).to_list(min(limit, 500))
     reporter_ids = list({d["reporter_id"] for d in items})
     users = {u["id"]: u.get("name") async for u in db.users.find({"id": {"$in": reporter_ids}})}
     return [d | {"reporter_name": users.get(d["reporter_id"], "—")} for d in items]
 
 
+DISPUTE_STATUSES = ("UNDER_REVIEW", "WAITING_CUSTOMER", "WAITING_PROVIDER", "RESOLVED", "REJECTED", "CANCELLED")
+# A resolved/rejected/cancelled dispute always releases the order back into a real
+# lifecycle state — either forward (refunded -> cancelled, released -> completed)
+# or back to whatever it was doing before the dispute froze it.
+DISPUTE_CLOSING_STATUSES = ("RESOLVED", "REJECTED", "CANCELLED")
+
+
 @router.patch("/disputes/{dispute_id}")
 async def admin_resolve_dispute(dispute_id: str, body: AdminDisputeActionIn, admin=Depends(get_current_admin)):
-    if body.status not in ("UNDER_REVIEW", "RESOLVED", "CANCELLED"):
+    rate_limit(f"admin-resolve-dispute:{admin['id']}", max_attempts=30, window_seconds=600)
+    if body.status not in DISPUTE_STATUSES:
         raise HTTPException(400, "Status inválido.")
+    if body.resolution_action not in ("refund_client", "release_worker", "none"):
+        raise HTTPException(400, "Ação de resolução inválida.")
     dispute = await db.disputes.find_one({"id": dispute_id})
     if not dispute:
         raise HTTPException(404, "Disputa não encontrada")
     await db.disputes.update_one({"id": dispute_id}, {"$set": {"status": body.status, "resolution": body.resolution, "updated_at": now()}})
-    if body.refund and body.status == "RESOLVED":
-        payment = await db.payments.find_one({"order_id": dispute["order_id"], "status": "held"})
-        if payment:
-            refund_cents = to_cents(payment["gross_amount"])
-            await credit_wallet(payment["client_id"], refund_cents, "REFUND", reference_type="dispute", reference_id=dispute_id, description="Reembolso por disputa")
-            await db.payments.update_one({"id": payment["id"]}, {"$set": {"status": "refunded", "updated_at": now()}})
-            await notify(payment["client_id"], "Reembolso realizado", "Sua disputa foi resolvida com reembolso.", "refund")
+
+    order = await db.orders.find_one({"id": dispute["order_id"]})
+    payment = await db.payments.find_one({"order_id": dispute["order_id"], "status": "held"})
+
+    if body.status == "RESOLVED" and body.resolution_action == "refund_client" and payment:
+        refund_cents = to_cents(payment["gross_amount"])
+        await credit_wallet(payment["client_id"], refund_cents, "REFUND", reference_type="dispute", reference_id=dispute_id, description="Reembolso por disputa")
+        await db.payments.update_one({"id": payment["id"]}, {"$set": {"status": "refunded", "updated_at": now()}})
+        await notify(payment["client_id"], "Reembolso realizado", "Sua disputa foi resolvida com reembolso.", "refund")
+    elif body.status == "RESOLVED" and body.resolution_action == "release_worker" and payment:
+        # Mirrors the release block in public.py's complete_order almost verbatim —
+        # a dispute found in the worker's favor pays out exactly like a normal completion.
+        worker_cents = to_cents(payment["worker_net_amount"])
+        commission_cents = to_cents(payment["commission_amount"])
+        if payment.get("worker_id") and worker_cents > 0:
+            await credit_wallet(payment["worker_id"], worker_cents, "EARNING", reference_type="dispute", reference_id=dispute_id, description="Disputa resolvida a favor do fazedor")
+        if commission_cents > 0:
+            await credit_wallet(PLATFORM_WALLET_USER_ID, commission_cents, "COMMISSION", reference_type="dispute", reference_id=dispute_id, description="Comissão — disputa")
+        await db.payments.update_one({"id": payment["id"]}, {"$set": {"status": "released", "updated_at": now()}})
+        if payment.get("worker_id"):
+            await db.users.update_one({"id": payment["worker_id"]}, {"$inc": {"jobs_done": 1}})
+            await notify(payment["worker_id"], "Disputa resolvida a seu favor", "O pagamento foi liberado para você.", "dispute")
+
+    # Order-status resolution — only touches orders this dispute actually locked
+    # (order.status == "disputed"); an order that was already completed/cancelled
+    # when the dispute was opened was never locked, so there's nothing to unwind.
+    if order and order.get("status") == "disputed" and body.status in DISPUTE_CLOSING_STATUSES:
+        if body.status == "RESOLVED" and body.resolution_action == "refund_client":
+            await db.orders.update_one({"id": order["id"]}, {"$set": {"status": "cancelled", "cancelled_at": now()}})
+        elif body.status == "RESOLVED" and body.resolution_action == "release_worker":
+            await db.orders.update_one({"id": order["id"]}, {"$set": {"status": "completed", "completed_at": now()}})
+        else:
+            # REJECTED / CANCELLED / RESOLVED-with-no-money-action: the dispute didn't
+            # change anything financially, so the order resumes where it left off.
+            await db.orders.update_one({"id": order["id"]}, {"$set": {"status": order.get("pre_dispute_status", "accepted")}})
+
     await notify(dispute["reporter_id"], "Disputa atualizada", f"Sua disputa foi marcada como {body.status.lower()}.", "dispute")
-    await log_action(admin["id"], "resolve_dispute", f"dispute:{dispute_id}:{body.status}")
+    await log_action(admin["id"], "resolve_dispute", f"dispute:{dispute_id}:{body.status}:{body.resolution_action}")
     return {"ok": True}
 
 
@@ -291,6 +419,7 @@ async def admin_get_config(admin=Depends(get_current_admin)):
 
 @router.patch("/config")
 async def admin_update_config(body: CommissionConfigIn, admin=Depends(get_current_admin)):
+    rate_limit(f"admin-update-config:{admin['id']}", max_attempts=20, window_seconds=600)
     data = {k: v for k, v in body.model_dump().items() if v is not None}
     if data:
         data["id"] = "financial"
@@ -299,11 +428,17 @@ async def admin_update_config(body: CommissionConfigIn, admin=Depends(get_curren
     return await get_commission_config()
 
 
+@router.get("/security-events")
+async def admin_security_events(user_id: Optional[str] = None, limit: int = 200, offset: int = 0, admin=Depends(get_current_admin)):
+    query = {"user_id": user_id} if user_id else {}
+    return await db.security_events.find(query, {"_id": 0}).sort("created_at", -1).skip(max(offset, 0)).to_list(min(limit, 500))
+
+
 # ---------- audit ----------
 
 @router.get("/audit")
-async def audit_log(admin=Depends(get_current_admin)):
-    items = await db.admin_actions.find({}, {"_id": 0}).sort("created_at", -1).to_list(200)
+async def audit_log(limit: int = 200, offset: int = 0, admin=Depends(get_current_admin)):
+    items = await db.admin_actions.find({}, {"_id": 0}).sort("created_at", -1).skip(max(offset, 0)).to_list(min(limit, 500))
     admin_ids = list({a["admin_id"] for a in items})
     admins = {u["id"]: u.get("name") async for u in db.users.find({"id": {"$in": admin_ids}})}
     return [a | {"admin_name": admins.get(a["admin_id"], "—")} for a in items]

@@ -44,6 +44,10 @@ class PreferenceIn(BaseModel):
     preference: str  # client | worker | both
 
 
+class NotificationPrefsIn(BaseModel):
+    prefs: dict[str, bool]  # notification type -> enabled
+
+
 class OrderCreate(BaseModel):
     title: str
     description: str = ""
@@ -57,6 +61,8 @@ class OrderCreate(BaseModel):
     budget: float = 0
     photos: list[str] = []
     fields: dict = {}
+    urgent: bool = False
+    recurrence: str = "none"  # none | weekly | biweekly | monthly
 
 
 class OrderUpdate(BaseModel):
@@ -70,6 +76,8 @@ class OrderUpdate(BaseModel):
     budget: Optional[float] = None
     photos: Optional[list[str]] = None
     fields: Optional[dict] = None
+    urgent: Optional[bool] = None
+    recurrence: Optional[str] = None
 
 
 class ProposalCreate(BaseModel):
@@ -185,6 +193,7 @@ class WithdrawalIn(BaseModel):
 
 class PayOrderIn(BaseModel):
     method: str = "wallet"  # wallet is the only method that can actually settle today
+    password: Optional[str] = None  # only required/checked when payment risk comes back MEDIUM
 
 
 class DisputeIn(BaseModel):
@@ -200,9 +209,19 @@ class AdminWithdrawalActionIn(BaseModel):
 
 
 class AdminDisputeActionIn(BaseModel):
-    status: str  # UNDER_REVIEW | RESOLVED | CANCELLED
+    status: str  # UNDER_REVIEW | WAITING_CUSTOMER | WAITING_PROVIDER | RESOLVED | REJECTED | CANCELLED
     resolution: str = ""
-    refund: bool = False
+    resolution_action: str = "none"  # refund_client | release_worker | none
+
+
+class AdminRiskFlagActionIn(BaseModel):
+    status: str  # RESOLVED | DISMISSED
+    note: str = ""
+
+
+class AdminReportActionIn(BaseModel):
+    status: str  # UNDER_REVIEW | RESOLVED | REJECTED
+    resolution: str = ""
 
 
 class AdminAdjustmentIn(BaseModel):

@@ -14,6 +14,10 @@ from database import db, new_id, now
 
 Bucket = Literal["available", "pending", "processing"]
 
+# The platform's own commission "account" — just another wallet, so commission
+# earnings go through the exact same ledger machinery as everyone else's money.
+PLATFORM_WALLET_USER_ID = "platform"
+
 
 class InsufficientFundsError(Exception):
     pass

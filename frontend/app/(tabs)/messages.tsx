@@ -5,6 +5,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { api, Message, Order, User } from "@/src/api";
 import { Avatar, EmptyState, Skeleton } from "@/src/components/ui";
+import { useBreakpoint } from "@/src/hooks/use-breakpoint";
 import { useApp } from "@/src/state";
 import { useTheme } from "@/src/theme";
 
@@ -14,6 +15,7 @@ export default function Messages() {
   const { colors } = useTheme();
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { isDesktop } = useBreakpoint();
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -23,16 +25,16 @@ export default function Messages() {
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg, paddingTop: insets.top + 12 }}>
-      <View style={{ paddingHorizontal: 20, marginBottom: 12 }}>
+      <View style={{ paddingHorizontal: 20, marginBottom: 12, width: "100%", maxWidth: isDesktop ? 720 : undefined, alignSelf: "center" }}>
         <Text style={{ color: colors.ink, fontSize: 24, fontWeight: "800", letterSpacing: -0.5 }}>Mensagens</Text>
       </View>
       {loading ? (
-        <View style={{ padding: 20, gap: 10 }}><Skeleton height={68} /><Skeleton height={68} /></View>
+        <View style={{ padding: 20, gap: 10, width: "100%", maxWidth: isDesktop ? 720 : undefined, alignSelf: "center" }}><Skeleton height={68} /><Skeleton height={68} /></View>
       ) : (
         <FlatList
           data={conversations}
           keyExtractor={(item) => item.order.id}
-          contentContainerStyle={{ paddingBottom: 32, flexGrow: 1 }}
+          contentContainerStyle={{ paddingBottom: 32, flexGrow: 1, width: "100%", maxWidth: isDesktop ? 720 : undefined, alignSelf: "center" }}
           renderItem={({ item }) => (
             <Pressable
               testID="conversation-row"

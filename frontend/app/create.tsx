@@ -33,18 +33,22 @@ const EXTRA_FIELDS: Record<string, { key: string; label: string; placeholder: st
 };
 
 const DATES = ["Hoje", "Amanhã", "Esta semana", "A combinar"];
+const RECURRENCE_OPTIONS: { key: "none" | "weekly" | "biweekly" | "monthly"; label: string }[] = [
+  { key: "none", label: "Não se repete" }, { key: "weekly", label: "Semanal" },
+  { key: "biweekly", label: "Quinzenal" }, { key: "monthly", label: "Mensal" },
+];
 
 export default function Create() {
   const { colors } = useTheme();
   const { categories, neighborhoods, city } = useApp();
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { orderId } = useLocalSearchParams<{ orderId?: string }>();
+  const { orderId, prefillFrom } = useLocalSearchParams<{ orderId?: string; prefillFrom?: string }>();
   const isEdit = !!orderId;
   useRequireAuth();
 
   const [step, setStep] = useState(0);
-  const [loadingOrder, setLoadingOrder] = useState(isEdit);
+  const [loadingOrder, setLoadingOrder] = useState(isEdit || !!prefillFrom);
   const [title, setTitle] = useState("");
   const [type, setType] = useState<"favor" | "servico">("favor");
   const [categoryId, setCategoryId] = useState<string | null>(null);
@@ -56,6 +60,8 @@ export default function Create() {
   const [hoodSearch, setHoodSearch] = useState("");
   const [dateLabel, setDateLabel] = useState("Hoje");
   const [timeLabel, setTimeLabel] = useState("");
+  const [urgent, setUrgent] = useState(false);
+  const [recurrence, setRecurrence] = useState<"none" | "weekly" | "biweekly" | "monthly">("none");
   const [budget, setBudget] = useState("");
   const [publishing, setPublishing] = useState(false);
 
@@ -66,11 +72,23 @@ export default function Create() {
       setSubcategoryId(order.subcategory_id || null); setDescription(order.description || "");
       setFields(order.fields || {}); setPhotos(order.photos || []); setHoodId(order.neighborhood_id || null);
       setDateLabel(order.date_label); setTimeLabel(order.time_label || ""); setBudget(String(order.budget || ""));
+      setUrgent(order.urgent || false); setRecurrence(order.recurrence || "none");
     }).catch(() => {
       Alert.alert("Ops", "Não conseguimos carregar esse pedido.");
       safeBack(router, "/(tabs)/home");
     }).finally(() => setLoadingOrder(false));
   }, [isEdit, orderId, router]);
+
+  // Rehire ("Contratar novamente"): prefill from a past order, but never carry over
+  // date/budget/photos — those need to be decided fresh for the new request.
+  useEffect(() => {
+    if (isEdit || !prefillFrom) return;
+    api.get(`/orders/${prefillFrom}`).then((order) => {
+      setTitle(order.title); setType(order.type); setCategoryId(order.category_id);
+      setSubcategoryId(order.subcategory_id || null); setDescription(order.description || "");
+      setFields(order.fields || {}); setHoodId(order.neighborhood_id || null);
+    }).catch(() => {}).finally(() => setLoadingOrder(false));
+  }, [isEdit, prefillFrom]);
 
   const category = categories.find((c) => c.id === categoryId);
   const extras = categoryId ? EXTRA_FIELDS[categoryId] || [] : [];
@@ -119,7 +137,7 @@ export default function Create() {
           title: title.trim(), description: description.trim(),
           category_id: categoryId, subcategory_id: subcategoryId, neighborhood_id: hoodId,
           date_label: dateLabel, time_label: timeLabel.trim(), budget: Number(budget),
-          fields, photos,
+          fields, photos, urgent, recurrence,
         });
         router.replace(`/order/${orderId}`);
       } else {
@@ -128,7 +146,7 @@ export default function Create() {
           category_id: categoryId, subcategory_id: subcategoryId,
           city_id: city?.id || "city-parauapebas", neighborhood_id: hoodId,
           date_label: dateLabel, time_label: timeLabel.trim(), budget: Number(budget),
-          fields, photos,
+          fields, photos, urgent, recurrence,
         });
         if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         router.replace(`/order/${order.id}?published=1`);
@@ -292,6 +310,24 @@ export default function Create() {
                 {DATES.map((d) => <Chip key={d} testID={`date-${d}`} label={d} active={dateLabel === d} onPress={() => setDateLabel(d)} />)}
               </View>
               <Field label="Horário (opcional)" value={timeLabel} onChangeText={setTimeLabel} placeholder="Ex: até 17:00" />
+
+              <Pressable
+                testID="urgent-toggle"
+                onPress={() => setUrgent(!urgent)}
+                style={{ flexDirection: "row", alignItems: "center", gap: 10, marginTop: 24, padding: 14, borderRadius: 16, borderWidth: 1.5, borderColor: urgent ? colors.danger : colors.border, backgroundColor: urgent ? colors.dangerSoft : colors.surface }}
+              >
+                <Ionicons name={urgent ? "flash" : "flash-outline"} size={20} color={urgent ? colors.danger : colors.muted} />
+                <View style={{ flex: 1 }}>
+                  <Text style={{ color: colors.ink, fontWeight: "700", fontSize: 14 }}>Preciso agora</Text>
+                  <Text style={{ color: colors.muted, fontSize: 12 }}>Destaca seu pedido para quem está por perto.</Text>
+                </View>
+                <Ionicons name={urgent ? "checkmark-circle" : "ellipse-outline"} size={22} color={urgent ? colors.danger : colors.faint} />
+              </Pressable>
+
+              <Text style={{ ...label, fontSize: 15, marginTop: 24, marginBottom: 8 }}>Se repete?</Text>
+              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                {RECURRENCE_OPTIONS.map((r) => <Chip key={r.key} testID={`recurrence-${r.key}`} label={r.label} active={recurrence === r.key} onPress={() => setRecurrence(r.key)} />)}
+              </View>
             </View>
           )}
 

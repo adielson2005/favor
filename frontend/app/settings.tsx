@@ -2,7 +2,7 @@ import { Ionicons } from "@expo/vector-icons";
 import Constants from "expo-constants";
 import { useFocusEffect, useRouter } from "expo-router";
 import React, { useCallback, useState } from "react";
-import { Alert, Linking, Pressable, ScrollView, Switch, Text, View } from "react-native";
+import { Alert, Pressable, ScrollView, Switch, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { api } from "@/src/api";
@@ -135,7 +135,7 @@ export default function Settings() {
         <CardSection title="Suporte">
           <SettingsRow testID="settings-report-row" icon="flag-outline" label="Denunciar um problema" onPress={() => setReportOpen(true)} />
           <Divider />
-          <SettingsRow testID="settings-contact-row" icon="mail-outline" label="Fale conosco" onPress={() => Linking.openURL("mailto:suporte@fazum.app")} />
+          <SettingsRow testID="settings-contact-row" icon="mail-outline" label="Fale conosco" onPress={() => router.push("/support")} />
           <Divider />
           <SettingsRow testID="settings-about-row" icon="information-circle-outline" label="Sobre o app" onPress={() => setAboutOpen(true)} last={!me.is_admin} />
           {me.is_admin && (

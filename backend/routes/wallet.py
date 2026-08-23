@@ -5,7 +5,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
-from auth import get_current_admin, get_current_user, rate_limit, verify_password
+from auth import get_current_user, rate_limit, verify_password
 from database import db, new_id, now
 from fraud import check_withdrawal_risk, create_risk_flag
 from models import (
@@ -13,6 +13,7 @@ from models import (
 )
 from payments import PaymentProviderError, get_payment_provider
 from security_events import log_security_event
+from verification import require_active_account
 from wallet import (
     InsufficientFundsError, credit_wallet, debit_wallet, get_commission_config,
     get_or_create_wallet, move_bucket, to_cents, to_reais, transaction_public, wallet_public,
@@ -110,6 +111,7 @@ async def list_bank_accounts(current=Depends(get_current_user)):
 @router.post("/bank-accounts")
 async def add_bank_account(body: BankAccountIn, request: Request, current=Depends(get_current_user)):
     rate_limit(f"add-bank-account:{current['id']}", max_attempts=10, window_seconds=3600)
+    require_active_account(current)
     if not verify_password(body.password, current.get("password_hash") or ""):
         raise HTTPException(401, "Senha incorreta.")
     if not body.document.isdigit():
@@ -160,11 +162,26 @@ async def remove_bank_account(account_id: str, body: BankAccountRemoveIn, reques
 @router.post("/wallet/withdrawals")
 async def create_withdrawal(body: WithdrawalIn, request: Request, current=Depends(get_current_user), idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key")):
     rate_limit(f"withdrawal:{current['id']}", max_attempts=10, window_seconds=600)
+    require_active_account(current)
     if not verify_password(body.password, current.get("password_hash") or ""):
         raise HTTPException(401, "Senha incorreta.")
     config = await get_commission_config()
     if body.amount < config["min_withdrawal"]:
         raise HTTPException(400, f"O valor mínimo de saque é R$ {config['min_withdrawal']:.2f}.")
+    max_per_day = config.get("max_withdrawal_per_day")
+    if max_per_day:
+        # Admin-configured daily cash cap — previously accepted via PATCH /admin/config
+        # but never actually enforced anywhere. Same "today" convention as fraud.py's
+        # own daily withdrawal count (ISO date prefix on created_at).
+        since = now()[:10]
+        today_total = 0.0
+        async for w in db.withdrawals.find(
+            {"user_id": current["id"], "created_at": {"$gte": since}, "status": {"$in": ["PENDING", "REVIEW_REQUIRED", "COMPLETED"]}},
+            {"amount": 1},
+        ):
+            today_total += w["amount"]
+        if today_total + body.amount > max_per_day:
+            raise HTTPException(400, f"Esse saque ultrapassa o limite diário de R$ {max_per_day:.2f}. Você já solicitou R$ {today_total:.2f} hoje.")
     account = await db.bank_accounts.find_one({"id": body.bank_account_id, "user_id": current["id"], "active": True}, {"_id": 0})
     if not account:
         raise HTTPException(404, "Conta bancária não encontrada.")

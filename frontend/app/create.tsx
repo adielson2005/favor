@@ -10,6 +10,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { api } from "@/src/api";
 import { Btn, Chip, Field } from "@/src/components/ui";
 import { fonts } from "@/src/hooks/use-app-fonts";
+import { useFeatureFlag } from "@/src/hooks/use-feature-flags";
 import { useRequireAuth } from "@/src/hooks/use-require-auth";
 import { useApp } from "@/src/state";
 import { type, useTheme } from "@/src/theme";
@@ -46,6 +47,8 @@ export default function Create() {
   const { orderId, prefillFrom } = useLocalSearchParams<{ orderId?: string; prefillFrom?: string }>();
   const isEdit = !!orderId;
   useRequireAuth();
+  const urgentServicesEnabled = useFeatureFlag("URGENT_SERVICES");
+  const recurringServicesEnabled = useFeatureFlag("RECURRING_SERVICES");
 
   const [step, setStep] = useState(0);
   const [loadingOrder, setLoadingOrder] = useState(isEdit || !!prefillFrom);
@@ -311,23 +314,29 @@ export default function Create() {
               </View>
               <Field label="Horário (opcional)" value={timeLabel} onChangeText={setTimeLabel} placeholder="Ex: até 17:00" />
 
-              <Pressable
-                testID="urgent-toggle"
-                onPress={() => setUrgent(!urgent)}
-                style={{ flexDirection: "row", alignItems: "center", gap: 10, marginTop: 24, padding: 14, borderRadius: 16, borderWidth: 1.5, borderColor: urgent ? colors.danger : colors.border, backgroundColor: urgent ? colors.dangerSoft : colors.surface }}
-              >
-                <Ionicons name={urgent ? "flash" : "flash-outline"} size={20} color={urgent ? colors.danger : colors.muted} />
-                <View style={{ flex: 1 }}>
-                  <Text style={{ color: colors.ink, fontWeight: "700", fontSize: 14 }}>Preciso agora</Text>
-                  <Text style={{ color: colors.muted, fontSize: 12 }}>Destaca seu pedido para quem está por perto.</Text>
-                </View>
-                <Ionicons name={urgent ? "checkmark-circle" : "ellipse-outline"} size={22} color={urgent ? colors.danger : colors.faint} />
-              </Pressable>
+              {urgentServicesEnabled && (
+                <Pressable
+                  testID="urgent-toggle"
+                  onPress={() => setUrgent(!urgent)}
+                  style={{ flexDirection: "row", alignItems: "center", gap: 10, marginTop: 24, padding: 14, borderRadius: 16, borderWidth: 1.5, borderColor: urgent ? colors.danger : colors.border, backgroundColor: urgent ? colors.dangerSoft : colors.surface }}
+                >
+                  <Ionicons name={urgent ? "flash" : "flash-outline"} size={20} color={urgent ? colors.danger : colors.muted} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ color: colors.ink, fontWeight: "700", fontSize: 14 }}>Preciso agora</Text>
+                    <Text style={{ color: colors.muted, fontSize: 12 }}>Destaca seu pedido para quem está por perto.</Text>
+                  </View>
+                  <Ionicons name={urgent ? "checkmark-circle" : "ellipse-outline"} size={22} color={urgent ? colors.danger : colors.faint} />
+                </Pressable>
+              )}
 
-              <Text style={{ ...label, fontSize: 15, marginTop: 24, marginBottom: 8 }}>Se repete?</Text>
-              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-                {RECURRENCE_OPTIONS.map((r) => <Chip key={r.key} testID={`recurrence-${r.key}`} label={r.label} active={recurrence === r.key} onPress={() => setRecurrence(r.key)} />)}
-              </View>
+              {recurringServicesEnabled && (
+                <>
+                  <Text style={{ ...label, fontSize: 15, marginTop: 24, marginBottom: 8 }}>Se repete?</Text>
+                  <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                    {RECURRENCE_OPTIONS.map((r) => <Chip key={r.key} testID={`recurrence-${r.key}`} label={r.label} active={recurrence === r.key} onPress={() => setRecurrence(r.key)} />)}
+                  </View>
+                </>
+              )}
             </View>
           )}
 

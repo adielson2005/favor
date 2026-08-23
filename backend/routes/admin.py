@@ -1,12 +1,16 @@
+import re
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 
-from auth import get_current_admin, rate_limit
+from admin_auth import require_permission
+from auth import rate_limit
 from database import db, new_id, now
+from feature_flags import list_flags, set_flag
 from models import (
-    ActivePatch, AdminAdjustmentIn, AdminDisputeActionIn, AdminReportActionIn, AdminRiskFlagActionIn,
-    AdminWithdrawalActionIn, CategoryIn, CommissionConfigIn, GeoCityIn, GeoNeighborhoodIn, GeoStateIn, SubcategoryIn,
+    ActivePatch, AdminAccountStatusIn, AdminAdjustmentIn, AdminDisputeActionIn, AdminReportActionIn,
+    AdminRiskFlagActionIn, AdminWithdrawalActionIn, CategoryIn, CommissionConfigIn, FeatureFlagPatchIn,
+    GeoCityIn, GeoNeighborhoodIn, GeoStateIn, NotificationSendIn, SubcategoryIn,
 )
 from wallet import (
     PLATFORM_WALLET_USER_ID, InsufficientFundsError, credit_wallet, debit_wallet,
@@ -16,8 +20,12 @@ from wallet import (
 router = APIRouter(prefix="/admin")
 
 
-async def log_action(admin_id: str, action: str, target: str):
-    await db.admin_actions.insert_one({"id": new_id(), "admin_id": admin_id, "action": action, "target": target, "created_at": now()})
+async def log_action(admin_id: str, action: str, target: str, ip: Optional[str] = None,
+                      result: str = "success", metadata: Optional[dict] = None):
+    await db.admin_actions.insert_one({
+        "id": new_id(), "admin_id": admin_id, "action": action, "target": target,
+        "ip": ip, "result": result, "metadata": metadata or {}, "created_at": now(),
+    })
 
 
 async def notify(user_id: str, title: str, body: str, kind: str, order_id: Optional[str] = None):
@@ -28,7 +36,7 @@ async def notify(user_id: str, title: str, body: str, kind: str, order_id: Optio
 
 
 @router.get("/overview")
-async def overview(admin=Depends(get_current_admin)):
+async def overview(admin=Depends(require_permission("dashboard.view"))):
     return {
         "users": await db.users.count_documents({}),
         "orders": await db.orders.count_documents({}),
@@ -39,18 +47,48 @@ async def overview(admin=Depends(get_current_admin)):
         "risk_flags_open": await db.risk_flags.count_documents({"status": "OPEN"}),
         "categories": await db.categories.count_documents({}),
         "neighborhoods": await db.neighborhoods.count_documents({}),
+        "withdrawals_pending": await db.withdrawals.count_documents({"status": {"$in": ["PENDING", "REVIEW_REQUIRED"]}}),
+        "disputes_open": await db.disputes.count_documents({"status": {"$nin": ["RESOLVED", "REJECTED", "CANCELLED"]}}),
     }
 
 
 # ---------- users ----------
 
 @router.get("/users")
-async def users(limit: int = 200, offset: int = 0, admin=Depends(get_current_admin)):
-    return await db.users.find({}, {"_id": 0, "password_hash": 0}).skip(max(offset, 0)).to_list(min(limit, 500))
+async def users(search: Optional[str] = None, status: Optional[str] = None, city_id: Optional[str] = None,
+                 limit: int = 200, offset: int = 0, admin=Depends(require_permission("users.view"))):
+    query: dict = {}
+    if search:
+        pattern = re.escape(search.strip())
+        query["$or"] = [
+            {"name": {"$regex": pattern, "$options": "i"}},
+            {"email": {"$regex": pattern, "$options": "i"}},
+            {"phone": {"$regex": pattern, "$options": "i"}},
+            {"id": search.strip()},
+        ]
+    if status:
+        query["account_status"] = status
+    if city_id:
+        query["city_id"] = city_id
+    total = await db.users.count_documents(query)
+    items = await db.users.find(query, {"_id": 0, "password_hash": 0}).sort("created_at", -1).skip(max(offset, 0)).to_list(min(limit, 500))
+    return {"items": items, "total": total}
+
+
+@router.get("/users/{user_id}")
+async def user_detail(user_id: str, admin=Depends(require_permission("users.view"))):
+    user = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
+    if not user:
+        raise HTTPException(404, "Usuário não encontrado")
+    orders = await db.orders.find({"$or": [{"client_id": user_id}, {"worker_id": user_id}]}, {"_id": 0}).sort("created_at", -1).to_list(50)
+    payments = await db.payments.find({"$or": [{"client_id": user_id}, {"worker_id": user_id}]}, {"_id": 0}).sort("created_at", -1).to_list(50)
+    disputes = await db.disputes.find({"reporter_id": user_id}, {"_id": 0}).sort("created_at", -1).to_list(20)
+    reports = await db.reports.find({"$or": [{"reporter_id": user_id}, {"target_type": "user", "target_id": user_id}]}, {"_id": 0}).sort("created_at", -1).to_list(20)
+    return {"user": user, "orders": orders, "payments": payments, "disputes": disputes, "reports": reports}
 
 
 @router.post("/users/{user_id}/block")
-async def toggle_block_user(user_id: str, admin=Depends(get_current_admin)):
+async def toggle_block_user(user_id: str, admin=Depends(require_permission("users.block"))):
     rate_limit(f"admin-block-user:{admin['id']}", max_attempts=60, window_seconds=300)
     user = await db.users.find_one({"id": user_id})
     if not user:
@@ -62,7 +100,7 @@ async def toggle_block_user(user_id: str, admin=Depends(get_current_admin)):
 
 
 @router.post("/users/{user_id}/revoke-sessions")
-async def revoke_user_sessions(user_id: str, admin=Depends(get_current_admin)):
+async def revoke_user_sessions(user_id: str, admin=Depends(require_permission("users.sessions.revoke"))):
     rate_limit(f"admin-revoke-sessions:{admin['id']}", max_attempts=60, window_seconds=300)
     user = await db.users.find_one({"id": user_id})
     if not user:
@@ -73,8 +111,26 @@ async def revoke_user_sessions(user_id: str, admin=Depends(get_current_admin)):
     return {"message": "Sessões encerradas."}
 
 
+@router.patch("/users/{user_id}/status")
+async def set_account_status(user_id: str, body: AdminAccountStatusIn, admin=Depends(require_permission("users.status.manage"))):
+    rate_limit(f"admin-set-status:{admin['id']}", max_attempts=60, window_seconds=300)
+    if body.status not in ("ACTIVE", "SUSPENDED", "BLOCKED", "PENDING_VERIFICATION"):
+        raise HTTPException(400, "Status inválido.")
+    user = await db.users.find_one({"id": user_id})
+    if not user:
+        raise HTTPException(404, "Usuário não encontrado")
+    # Keep the legacy `blocked` boolean (still what get_current_user checks on every
+    # request) in lockstep with the new status, so this endpoint has real teeth and
+    # the old block/unblock endpoint doesn't silently fight it.
+    await db.users.update_one({"id": user_id}, {"$set": {
+        "account_status": body.status, "blocked": body.status == "BLOCKED",
+    }})
+    await log_action(admin["id"], "set_account_status", f"user:{user_id}:{body.status}")
+    return {"account_status": body.status}
+
+
 @router.post("/users/{user_id}/verify")
-async def toggle_verify_user(user_id: str, admin=Depends(get_current_admin)):
+async def toggle_verify_user(user_id: str, admin=Depends(require_permission("users.verify"))):
     rate_limit(f"admin-verify-user:{admin['id']}", max_attempts=60, window_seconds=300)
     user = await db.users.find_one({"id": user_id})
     if not user:
@@ -88,12 +144,18 @@ async def toggle_verify_user(user_id: str, admin=Depends(get_current_admin)):
 # ---------- orders ----------
 
 @router.get("/orders")
-async def orders(limit: int = 200, offset: int = 0, admin=Depends(get_current_admin)):
-    return await db.orders.find({}, {"_id": 0}).sort("created_at", -1).skip(max(offset, 0)).to_list(min(limit, 500))
+async def orders(status: Optional[str] = None, urgent: Optional[bool] = None, limit: int = 200, offset: int = 0,
+                  admin=Depends(require_permission("orders.view"))):
+    query: dict = {}
+    if status:
+        query["status"] = status
+    if urgent is not None:
+        query["urgent"] = urgent
+    return await db.orders.find(query, {"_id": 0}).sort("created_at", -1).skip(max(offset, 0)).to_list(min(limit, 500))
 
 
 @router.post("/orders/{order_id}/cancel")
-async def cancel_order(order_id: str, admin=Depends(get_current_admin)):
+async def cancel_order(order_id: str, admin=Depends(require_permission("orders.cancel"))):
     rate_limit(f"admin-cancel-order:{admin['id']}", max_attempts=30, window_seconds=600)
     # Atomic claim, same guard style used everywhere else in the order lifecycle —
     # admin can reach further into the lifecycle than a client can (fraud response
@@ -125,7 +187,7 @@ async def cancel_order(order_id: str, admin=Depends(get_current_admin)):
 # ---------- catalog ----------
 
 @router.get("/categories")
-async def categories(admin=Depends(get_current_admin)):
+async def categories(admin=Depends(require_permission("categories.manage"))):
     cats = await db.categories.find({}, {"_id": 0}).sort("order", 1).to_list(100)
     subs = await db.subcategories.find({}, {"_id": 0}).to_list(500)
     for c in cats:
@@ -134,7 +196,7 @@ async def categories(admin=Depends(get_current_admin)):
 
 
 @router.post("/categories")
-async def create_category(body: CategoryIn, admin=Depends(get_current_admin)):
+async def create_category(body: CategoryIn, admin=Depends(require_permission("categories.manage"))):
     rate_limit(f"admin-catalog:{admin['id']}", max_attempts=60, window_seconds=300)
     order = await db.categories.count_documents({})
     cat = body.model_dump() | {"id": new_id(), "order": order}
@@ -144,7 +206,7 @@ async def create_category(body: CategoryIn, admin=Depends(get_current_admin)):
 
 
 @router.patch("/categories/{cat_id}")
-async def patch_category(cat_id: str, body: ActivePatch, admin=Depends(get_current_admin)):
+async def patch_category(cat_id: str, body: ActivePatch, admin=Depends(require_permission("categories.manage"))):
     rate_limit(f"admin-catalog:{admin['id']}", max_attempts=60, window_seconds=300)
     data = {k: v for k, v in body.model_dump().items() if v is not None}
     await db.categories.update_one({"id": cat_id}, {"$set": data})
@@ -153,7 +215,7 @@ async def patch_category(cat_id: str, body: ActivePatch, admin=Depends(get_curre
 
 
 @router.post("/subcategories")
-async def create_subcategory(body: SubcategoryIn, admin=Depends(get_current_admin)):
+async def create_subcategory(body: SubcategoryIn, admin=Depends(require_permission("categories.manage"))):
     rate_limit(f"admin-catalog:{admin['id']}", max_attempts=60, window_seconds=300)
     sub = body.model_dump() | {"id": new_id()}
     await db.subcategories.insert_one(dict(sub))
@@ -162,7 +224,7 @@ async def create_subcategory(body: SubcategoryIn, admin=Depends(get_current_admi
 
 
 @router.patch("/subcategories/{sub_id}")
-async def patch_subcategory(sub_id: str, body: ActivePatch, admin=Depends(get_current_admin)):
+async def patch_subcategory(sub_id: str, body: ActivePatch, admin=Depends(require_permission("categories.manage"))):
     rate_limit(f"admin-catalog:{admin['id']}", max_attempts=60, window_seconds=300)
     data = {k: v for k, v in body.model_dump().items() if v is not None}
     await db.subcategories.update_one({"id": sub_id}, {"$set": data})
@@ -173,7 +235,7 @@ async def patch_subcategory(sub_id: str, body: ActivePatch, admin=Depends(get_cu
 # ---------- geo ----------
 
 @router.get("/geo")
-async def geo(admin=Depends(get_current_admin)):
+async def geo(admin=Depends(require_permission("geo.manage"))):
     return {
         "states": await db.states.find({}, {"_id": 0}).to_list(50),
         "cities": await db.cities.find({}, {"_id": 0}).sort("name", 1).to_list(300),
@@ -182,7 +244,7 @@ async def geo(admin=Depends(get_current_admin)):
 
 
 @router.post("/geo/states")
-async def create_state(body: GeoStateIn, admin=Depends(get_current_admin)):
+async def create_state(body: GeoStateIn, admin=Depends(require_permission("geo.manage"))):
     rate_limit(f"admin-geo:{admin['id']}", max_attempts=60, window_seconds=300)
     state = body.model_dump() | {"id": new_id()}
     await db.states.insert_one(dict(state))
@@ -191,7 +253,7 @@ async def create_state(body: GeoStateIn, admin=Depends(get_current_admin)):
 
 
 @router.post("/geo/cities")
-async def create_city(body: GeoCityIn, admin=Depends(get_current_admin)):
+async def create_city(body: GeoCityIn, admin=Depends(require_permission("geo.manage"))):
     rate_limit(f"admin-geo:{admin['id']}", max_attempts=60, window_seconds=300)
     city = body.model_dump() | {"id": new_id()}
     await db.cities.insert_one(dict(city))
@@ -200,7 +262,7 @@ async def create_city(body: GeoCityIn, admin=Depends(get_current_admin)):
 
 
 @router.post("/geo/neighborhoods")
-async def create_neighborhood(body: GeoNeighborhoodIn, admin=Depends(get_current_admin)):
+async def create_neighborhood(body: GeoNeighborhoodIn, admin=Depends(require_permission("geo.manage"))):
     rate_limit(f"admin-geo:{admin['id']}", max_attempts=60, window_seconds=300)
     hood = body.model_dump() | {"id": new_id()}
     await db.neighborhoods.insert_one(dict(hood))
@@ -209,7 +271,7 @@ async def create_neighborhood(body: GeoNeighborhoodIn, admin=Depends(get_current
 
 
 @router.patch("/geo/{kind}/{item_id}")
-async def patch_geo(kind: str, item_id: str, body: ActivePatch, admin=Depends(get_current_admin)):
+async def patch_geo(kind: str, item_id: str, body: ActivePatch, admin=Depends(require_permission("geo.manage"))):
     rate_limit(f"admin-geo:{admin['id']}", max_attempts=60, window_seconds=300)
     coll = {"states": db.states, "cities": db.cities, "neighborhoods": db.neighborhoods}.get(kind)
     if coll is None:
@@ -223,15 +285,15 @@ async def patch_geo(kind: str, item_id: str, body: ActivePatch, admin=Depends(ge
 # ---------- reports ----------
 
 @router.get("/reports")
-async def reports(limit: int = 200, offset: int = 0, admin=Depends(get_current_admin)):
+async def reports(limit: int = 200, offset: int = 0, admin=Depends(require_permission("reports.view"))):
     items = await db.reports.find({}, {"_id": 0}).sort("created_at", -1).skip(max(offset, 0)).to_list(min(limit, 500))
     reporter_ids = list({r["reporter_id"] for r in items})
-    users = {u["id"]: u.get("name") async for u in db.users.find({"id": {"$in": reporter_ids}})}
+    users = {u["id"]: u.get("name") async for u in db.users.find({"id": {"$in": reporter_ids}}, {"id": 1, "name": 1})}
     return [r | {"reporter_name": users.get(r["reporter_id"], "—")} for r in items]
 
 
 @router.patch("/reports/{report_id}")
-async def admin_update_report(report_id: str, body: AdminReportActionIn, admin=Depends(get_current_admin)):
+async def admin_update_report(report_id: str, body: AdminReportActionIn, admin=Depends(require_permission("reports.manage"))):
     rate_limit(f"admin-update-report:{admin['id']}", max_attempts=30, window_seconds=600)
     if body.status not in ("UNDER_REVIEW", "RESOLVED", "REJECTED"):
         raise HTTPException(400, "Status inválido.")
@@ -246,16 +308,16 @@ async def admin_update_report(report_id: str, body: AdminReportActionIn, admin=D
 # ---------- risk ----------
 
 @router.get("/risk-flags")
-async def admin_list_risk_flags(status: Optional[str] = None, limit: int = 200, offset: int = 0, admin=Depends(get_current_admin)):
+async def admin_list_risk_flags(status: Optional[str] = None, limit: int = 200, offset: int = 0, admin=Depends(require_permission("risk.view"))):
     query = {"status": status} if status else {}
     items = await db.risk_flags.find(query, {"_id": 0}).sort("created_at", -1).skip(max(offset, 0)).to_list(min(limit, 500))
     user_ids = list({f["user_id"] for f in items})
-    users = {u["id"]: u.get("name") async for u in db.users.find({"id": {"$in": user_ids}})}
+    users = {u["id"]: u.get("name") async for u in db.users.find({"id": {"$in": user_ids}}, {"id": 1, "name": 1})}
     return [f | {"user_name": users.get(f["user_id"], "—")} for f in items]
 
 
 @router.patch("/risk-flags/{flag_id}")
-async def admin_update_risk_flag(flag_id: str, body: AdminRiskFlagActionIn, admin=Depends(get_current_admin)):
+async def admin_update_risk_flag(flag_id: str, body: AdminRiskFlagActionIn, admin=Depends(require_permission("risk.manage"))):
     rate_limit(f"admin-update-risk-flag:{admin['id']}", max_attempts=60, window_seconds=300)
     if body.status not in ("RESOLVED", "DISMISSED"):
         raise HTTPException(400, "Status inválido.")
@@ -270,15 +332,15 @@ async def admin_update_risk_flag(flag_id: str, body: AdminRiskFlagActionIn, admi
 # ---------- financial ----------
 
 @router.get("/wallets/{user_id}")
-async def admin_get_wallet(user_id: str, admin=Depends(get_current_admin)):
+async def admin_get_wallet(user_id: str, admin=Depends(require_permission("wallet.view"))):
     from wallet import get_or_create_wallet
     return wallet_public(await get_or_create_wallet(user_id))
 
 
 @router.post("/wallets/{user_id}/adjust")
-async def admin_adjust_wallet(user_id: str, body: AdminAdjustmentIn, admin=Depends(get_current_admin),
+async def admin_adjust_wallet(user_id: str, body: AdminAdjustmentIn, admin=Depends(require_permission("wallet.adjust")),
                                idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key")):
-    rate_limit(f"admin-wallet-adjust:{admin['id']}", max_attempts=60, window_seconds=600)
+    rate_limit(f"admin-wallet-adjust:{admin['id']}", max_attempts=300, window_seconds=600)
     if body.amount == 0:
         raise HTTPException(400, "Informe um valor diferente de zero.")
     cents = to_cents(abs(body.amount))
@@ -297,13 +359,13 @@ async def admin_adjust_wallet(user_id: str, body: AdminAdjustmentIn, admin=Depen
 
 
 @router.get("/withdrawals")
-async def admin_list_withdrawals(status: Optional[str] = None, admin=Depends(get_current_admin)):
+async def admin_list_withdrawals(status: Optional[str] = None, admin=Depends(require_permission("withdrawals.view"))):
     query = {"status": status} if status else {}
     return await db.withdrawals.find(query, {"_id": 0}).sort("created_at", -1).to_list(200)
 
 
 @router.post("/withdrawals/{withdrawal_id}/approve")
-async def admin_approve_withdrawal(withdrawal_id: str, admin=Depends(get_current_admin)):
+async def admin_approve_withdrawal(withdrawal_id: str, admin=Depends(require_permission("withdrawals.manage"))):
     rate_limit(f"admin-withdrawal-action:{admin['id']}", max_attempts=30, window_seconds=600)
     # Atomic claim first — a double-click or two admins approving the same withdrawal
     # concurrently can only have one of them actually flip PENDING/REVIEW_REQUIRED ->
@@ -324,7 +386,7 @@ async def admin_approve_withdrawal(withdrawal_id: str, admin=Depends(get_current
 
 
 @router.post("/withdrawals/{withdrawal_id}/reject")
-async def admin_reject_withdrawal(withdrawal_id: str, body: AdminWithdrawalActionIn, admin=Depends(get_current_admin)):
+async def admin_reject_withdrawal(withdrawal_id: str, body: AdminWithdrawalActionIn, admin=Depends(require_permission("withdrawals.manage"))):
     rate_limit(f"admin-withdrawal-action:{admin['id']}", max_attempts=30, window_seconds=600)
     withdrawal = await db.withdrawals.find_one_and_update(
         {"id": withdrawal_id, "status": {"$in": ["PENDING", "REVIEW_REQUIRED"]}},
@@ -340,16 +402,16 @@ async def admin_reject_withdrawal(withdrawal_id: str, body: AdminWithdrawalActio
 
 
 @router.get("/payments")
-async def admin_list_payments(limit: int = 200, offset: int = 0, admin=Depends(get_current_admin)):
+async def admin_list_payments(limit: int = 200, offset: int = 0, admin=Depends(require_permission("payments.view"))):
     return await db.payments.find({}, {"_id": 0}).sort("created_at", -1).skip(max(offset, 0)).to_list(min(limit, 500))
 
 
 @router.get("/disputes")
-async def admin_list_disputes(status: Optional[str] = None, limit: int = 200, offset: int = 0, admin=Depends(get_current_admin)):
+async def admin_list_disputes(status: Optional[str] = None, limit: int = 200, offset: int = 0, admin=Depends(require_permission("disputes.view"))):
     query = {"status": status} if status else {}
     items = await db.disputes.find(query, {"_id": 0}).sort("created_at", -1).skip(max(offset, 0)).to_list(min(limit, 500))
     reporter_ids = list({d["reporter_id"] for d in items})
-    users = {u["id"]: u.get("name") async for u in db.users.find({"id": {"$in": reporter_ids}})}
+    users = {u["id"]: u.get("name") async for u in db.users.find({"id": {"$in": reporter_ids}}, {"id": 1, "name": 1})}
     return [d | {"reporter_name": users.get(d["reporter_id"], "—")} for d in items]
 
 
@@ -361,7 +423,7 @@ DISPUTE_CLOSING_STATUSES = ("RESOLVED", "REJECTED", "CANCELLED")
 
 
 @router.patch("/disputes/{dispute_id}")
-async def admin_resolve_dispute(dispute_id: str, body: AdminDisputeActionIn, admin=Depends(get_current_admin)):
+async def admin_resolve_dispute(dispute_id: str, body: AdminDisputeActionIn, admin=Depends(require_permission("disputes.resolve"))):
     rate_limit(f"admin-resolve-dispute:{admin['id']}", max_attempts=30, window_seconds=600)
     if body.status not in DISPUTE_STATUSES:
         raise HTTPException(400, "Status inválido.")
@@ -413,12 +475,12 @@ async def admin_resolve_dispute(dispute_id: str, body: AdminDisputeActionIn, adm
 
 
 @router.get("/config")
-async def admin_get_config(admin=Depends(get_current_admin)):
+async def admin_get_config(admin=Depends(require_permission("config.view"))):
     return await get_commission_config()
 
 
 @router.patch("/config")
-async def admin_update_config(body: CommissionConfigIn, admin=Depends(get_current_admin)):
+async def admin_update_config(body: CommissionConfigIn, admin=Depends(require_permission("config.manage"))):
     rate_limit(f"admin-update-config:{admin['id']}", max_attempts=20, window_seconds=600)
     data = {k: v for k, v in body.model_dump().items() if v is not None}
     if data:
@@ -429,16 +491,101 @@ async def admin_update_config(body: CommissionConfigIn, admin=Depends(get_curren
 
 
 @router.get("/security-events")
-async def admin_security_events(user_id: Optional[str] = None, limit: int = 200, offset: int = 0, admin=Depends(get_current_admin)):
+async def admin_security_events(user_id: Optional[str] = None, limit: int = 200, offset: int = 0, admin=Depends(require_permission("security_events.view"))):
     query = {"user_id": user_id} if user_id else {}
     return await db.security_events.find(query, {"_id": 0}).sort("created_at", -1).skip(max(offset, 0)).to_list(min(limit, 500))
+
+
+# ---------- feature flags ----------
+
+@router.get("/feature-flags")
+async def admin_list_feature_flags(admin=Depends(require_permission("feature_flags.view"))):
+    return await list_flags()
+
+
+@router.patch("/feature-flags/{key}")
+async def admin_patch_feature_flag(key: str, body: FeatureFlagPatchIn, admin=Depends(require_permission("feature_flags.manage"))):
+    rate_limit(f"admin-feature-flags:{admin['id']}", max_attempts=60, window_seconds=300)
+    flag = await set_flag(key, body.enabled, admin["id"])
+    await log_action(admin["id"], "update_feature_flag", f"feature_flag:{key}:{body.enabled}")
+    return flag
 
 
 # ---------- audit ----------
 
 @router.get("/audit")
-async def audit_log(limit: int = 200, offset: int = 0, admin=Depends(get_current_admin)):
+async def audit_log(limit: int = 200, offset: int = 0, admin=Depends(require_permission("audit.view"))):
     items = await db.admin_actions.find({}, {"_id": 0}).sort("created_at", -1).skip(max(offset, 0)).to_list(min(limit, 500))
     admin_ids = list({a["admin_id"] for a in items})
-    admins = {u["id"]: u.get("name") async for u in db.users.find({"id": {"$in": admin_ids}})}
+    admins = {a["id"]: a.get("name") async for a in db.admin_users.find({"id": {"$in": admin_ids}}, {"id": 1, "name": 1})}
     return [a | {"admin_name": admins.get(a["admin_id"], "—")} for a in items]
+
+
+# ---------- supervision (OWNER-only oversight view) ----------
+
+@router.get("/supervision")
+async def supervision(admin=Depends(require_permission("supervision.view"))):
+    from datetime import datetime, timezone
+
+    from admin_auth import ONLINE_WINDOW_SECONDS
+
+    members = await db.admin_users.find({}, {"_id": 0, "password_hash": 0, "totp_secret": 0, "totp_secret_pending": 0}).sort("name", 1).to_list(200)
+    now_dt = datetime.now(timezone.utc)
+    for m in members:
+        last = m.get("last_active_at")
+        online = False
+        if last:
+            try:
+                online = (now_dt - datetime.fromisoformat(last)).total_seconds() <= ONLINE_WINDOW_SECONDS
+            except ValueError:
+                online = False
+        m["online"] = online
+
+    recent_actions = await db.admin_actions.find({}, {"_id": 0}).sort("created_at", -1).to_list(50)
+    action_admin_ids = list({a["admin_id"] for a in recent_actions})
+    action_admins = {a["id"]: a.get("name") async for a in db.admin_users.find({"id": {"$in": action_admin_ids}}, {"id": 1, "name": 1})}
+    recent_actions = [a | {"admin_name": action_admins.get(a["admin_id"], "—")} for a in recent_actions]
+
+    # All reused queries — none of this duplicates data, just reassembles counts
+    # already computed individually elsewhere (overview, tickets, risk-flags) into
+    # one "what needs the OWNER's attention right now" response.
+    alerts = {
+        "tickets_open": await db.tickets.count_documents({"status": "OPEN"}),
+        "disputes_open": await db.disputes.count_documents({"status": {"$nin": ["RESOLVED", "REJECTED", "CANCELLED"]}}),
+        "reports_open": await db.reports.count_documents({"status": "OPEN"}),
+        "withdrawals_review": await db.withdrawals.count_documents({"status": {"$in": ["PENDING", "REVIEW_REQUIRED"]}}),
+        "risk_flags_critical": await db.risk_flags.count_documents({"status": "OPEN", "level": {"$in": ["HIGH", "CRITICAL"]}}),
+    }
+    return {"admins": members, "recent_actions": recent_actions, "alerts": alerts}
+
+
+# ---------- notifications ----------
+
+@router.post("/notifications")
+async def admin_send_notification(body: NotificationSendIn, admin=Depends(require_permission("notifications.send"))):
+    rate_limit(f"admin-notifications:{admin['id']}", max_attempts=20, window_seconds=600)
+    target = body.target.strip()
+    query: dict
+    if target == "all":
+        query = {}
+    elif target.startswith("user:"):
+        query = {"id": target.removeprefix("user:")}
+    elif target.startswith("city:"):
+        query = {"city_id": target.removeprefix("city:")}
+    elif target.startswith("category:"):
+        pref = target.removeprefix("category:")
+        if pref not in ("client", "worker", "both"):
+            raise HTTPException(400, "Categoria de destinatário inválida.")
+        query = {"preference": pref}
+    else:
+        raise HTTPException(400, "Alvo inválido.")
+
+    recipient_ids = [u["id"] async for u in db.users.find(query, {"id": 1})]
+    if not recipient_ids:
+        raise HTTPException(400, "Nenhum destinatário encontrado para esse alvo.")
+    for user_id in recipient_ids:
+        await notify(user_id, body.title, body.body, "admin_broadcast")
+    await log_action(admin["id"], "NOTIFICATION_SENT", f"target:{target}", metadata={
+        "target": target, "recipient_count": len(recipient_ids), "title": body.title,
+    })
+    return {"ok": True, "recipient_count": len(recipient_ids)}

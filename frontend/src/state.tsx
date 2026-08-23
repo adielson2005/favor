@@ -22,6 +22,7 @@ type AppState = {
   unread: number;
   refreshUnread: () => void;
   refreshMe: () => void;
+  featureFlags: Record<string, boolean>;
 };
 
 const AppContext = createContext<AppState>(null as never);
@@ -35,6 +36,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [cities, setCities] = useState<City[]>([]);
   const [neighborhoods, setNeighborhoods] = useState<Neighborhood[]>([]);
   const [unread, setUnread] = useState(0);
+  const [featureFlags, setFeatureFlags] = useState<Record<string, boolean>>({});
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -44,6 +46,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setCategories(data.categories || []);
       setCities(data.cities || []);
       setNeighborhoods(data.neighborhoods || []);
+      setFeatureFlags(data.feature_flags || {});
     } catch {
       setError(true);
     } finally {
@@ -71,8 +74,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const city = cities.find((c) => c.id === user?.city_id) || cities[0] || null;
 
   const value = useMemo(
-    () => ({ loading, error, retry: load, me: user as User, mode, setMode, categories, cities, neighborhoods, city, unread, refreshUnread, refreshMe: refreshUser }),
-    [loading, error, load, user, mode, categories, cities, neighborhoods, city, unread, refreshUnread, refreshUser],
+    () => ({ loading, error, retry: load, me: user as User, mode, setMode, categories, cities, neighborhoods, city, unread, refreshUnread, refreshMe: refreshUser, featureFlags }),
+    [loading, error, load, user, mode, categories, cities, neighborhoods, city, unread, refreshUnread, refreshUser, featureFlags],
   );
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }

@@ -77,13 +77,6 @@ async def get_optional_user(authorization: Optional[str] = Header(None)) -> Opti
         return None
 
 
-async def get_current_admin(authorization: Optional[str] = Header(None)) -> dict:
-    user = await get_current_user(authorization)
-    if not user.get("is_admin"):
-        raise HTTPException(403, "Acesso restrito à administração")
-    return user
-
-
 # ---------- rate limiting (single-instance, in-memory sliding window) ----------
 
 _attempts: dict[str, list[float]] = {}

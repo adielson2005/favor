@@ -191,5 +191,9 @@ DEFAULT_FINANCIAL_CONFIG = {
 
 
 async def get_commission_config() -> dict:
+    # Merge over the defaults rather than falling back only when the document is
+    # entirely absent — a partial PATCH /admin/config (upsert with just the one
+    # changed field) previously left a document that HAS an id but is missing every
+    # other key, and every caller here assumes the full key set always exists.
     config = await db.platform_config.find_one({"id": "financial"}, {"_id": 0})
-    return config or dict(DEFAULT_FINANCIAL_CONFIG)
+    return {**DEFAULT_FINANCIAL_CONFIG, **(config or {})}

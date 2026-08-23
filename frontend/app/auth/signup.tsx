@@ -9,12 +9,25 @@ import { api, City, Neighborhood, StateRef } from "@/src/api";
 import { useAuth } from "@/src/auth";
 import { Btn, Chip, Field } from "@/src/components/ui";
 import { fonts } from "@/src/hooks/use-app-fonts";
+import { useFeatureFlag } from "@/src/hooks/use-feature-flags";
 import { extractIdToken, useGoogleAuth } from "@/src/hooks/use-google-auth";
 import { useBreakpoint } from "@/src/hooks/use-breakpoint";
 import { radius, space, type, useTheme } from "@/src/theme";
 import { safeBack } from "@/src/utils/navigation";
 
-const STEPS = ["nome", "email", "senha", "local", "preferencia"] as const;
+const STEPS = ["nome", "email", "telefone", "senha", "local", "preferencia"] as const;
+
+function formatPhoneBR(raw: string): string {
+  const digits = raw.replace(/\D/g, "").slice(0, 11);
+  if (digits.length <= 2) return digits;
+  if (digits.length <= 7) return `(${digits.slice(0, 2)}) ${digits.slice(2)}`;
+  return `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7)}`;
+}
+
+function isValidPhoneBR(formatted: string): boolean {
+  const digits = formatted.replace(/\D/g, "");
+  return digits.length === 10 || digits.length === 11;
+}
 
 const PREFERENCES = [
   { key: "client" as const, icon: "hand-left-outline" as const, title: "Preciso de ajuda", body: "Quero publicar tarefas para outras pessoas fazerem." },
@@ -40,11 +53,13 @@ export default function Signup() {
   const insets = useSafeAreaInsets();
   const google = useGoogleAuth();
   const { isDesktop } = useBreakpoint();
+  const googleLoginEnabled = useFeatureFlag("GOOGLE_LOGIN");
 
   const [step, setStep] = useState(0);
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [states, setStates] = useState<StateRef[]>([]);
@@ -55,6 +70,7 @@ export default function Signup() {
   const [hoodId, setHoodId] = useState<string | null>(null);
   const [hoodSearch, setHoodSearch] = useState("");
   const [preference, setPreference] = useState<"client" | "worker" | "both" | null>(null);
+  const [acceptTerms, setAcceptTerms] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
   const [createdName, setCreatedName] = useState("");
@@ -90,11 +106,12 @@ export default function Signup() {
   const canContinue =
     stepKey === "nome" ? firstName.trim().length >= 2 :
     stepKey === "email" ? /\S+@\S+\.\S+/.test(email) :
+    stepKey === "telefone" ? isValidPhoneBR(phone) :
     stepKey === "senha" ? password.length >= 8 && /[a-z]/i.test(password) && /\d/.test(password) && password === confirmPassword :
     stepKey === "local" ? !!cityId :
-    !!preference;
+    !!preference && acceptTerms;
 
-  const hasProgress = firstName.trim() || lastName.trim() || email.trim() || password;
+  const hasProgress = firstName.trim() || lastName.trim() || email.trim() || phone.trim() || password;
 
   const back = () => {
     if (step > 0) { setStep(step - 1); return; }
@@ -112,7 +129,10 @@ export default function Signup() {
     setSubmitting(true);
     const name = `${firstName.trim()} ${lastName.trim()}`.trim();
     try {
-      await register({ name, email: email.trim().toLowerCase(), password, city_id: cityId!, neighborhood_id: hoodId, preference: preference! });
+      await register({
+        name, email: email.trim().toLowerCase(), phone: phone.replace(/\D/g, ""), password,
+        city_id: cityId!, neighborhood_id: hoodId, preference: preference!, accept_terms: acceptTerms,
+      });
       setCreatedName(firstName.trim());
       setSuccess(true);
     } catch (e: any) {
@@ -131,20 +151,23 @@ export default function Signup() {
   }, [success, router]);
 
   useEffect(() => {
+    // A user simply closing the Google account picker fires a "dismiss"/"cancel"
+    // response, not an error — nothing to alert about.
+    if (google.response?.type === "dismiss" || google.response?.type === "cancel") return;
     const idToken = extractIdToken(google.response);
     if (!idToken) return;
     (async () => {
       setGoogleLoading(true);
       try {
-        await loginWithGoogle(idToken, cityId || "city-parauapebas");
-        router.replace("/");
+        const me = await loginWithGoogle(idToken, google.nonce, cityId || "city-parauapebas");
+        router.replace(me.phone ? "/" : "/auth/complete-profile");
       } catch (e: any) {
         Alert.alert("Não foi possível continuar com o Google", e.message || "Tente novamente.");
       } finally {
         setGoogleLoading(false);
       }
     })();
-  }, [google.response, loginWithGoogle, router, cityId]);
+  }, [google.response, google.nonce, loginWithGoogle, router, cityId]);
 
   const pressGoogle = () => {
     if (!google.configured) {
@@ -208,29 +231,50 @@ export default function Signup() {
               <Text style={hint}>Usaremos seu e-mail para proteger sua conta e avisar sobre seus pedidos.</Text>
               <Field testID="signup-email-input" label="E-mail" value={email} onChangeText={setEmail} placeholder="voce@email.com" autoCapitalize="none" keyboardType="email-address" autoComplete="email" autoFocus />
 
-              <View style={{ flexDirection: "row", alignItems: "center", gap: space.md, marginVertical: space.xl }}>
-                <View style={{ flex: 1, height: 1, backgroundColor: colors.border }} />
-                <Text style={{ color: colors.faint, ...type.micro }}>ou</Text>
-                <View style={{ flex: 1, height: 1, backgroundColor: colors.border }} />
-              </View>
+              {googleLoginEnabled && (
+                <>
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: space.md, marginVertical: space.xl }}>
+                    <View style={{ flex: 1, height: 1, backgroundColor: colors.border }} />
+                    <Text style={{ color: colors.faint, ...type.micro }}>ou</Text>
+                    <View style={{ flex: 1, height: 1, backgroundColor: colors.border }} />
+                  </View>
 
-              <Pressable
-                testID="signup-google-button"
-                onPress={pressGoogle}
-                disabled={googleLoading}
-                style={({ pressed }) => [{
-                  flexDirection: "row", alignItems: "center", justifyContent: "center", gap: space.sm,
-                  height: 52, borderRadius: radius.md, borderWidth: 1.5, borderColor: colors.border,
-                  backgroundColor: colors.surface, opacity: pressed || googleLoading ? 0.7 : 1,
-                }]}
-              >
-                {googleLoading ? <ActivityIndicator color={colors.ink} size="small" /> : (
-                  <>
-                    <Ionicons name="logo-google" size={18} color={colors.ink} />
-                    <Text style={{ color: colors.ink, fontFamily: fonts.bodyBold, fontSize: 15 }}>Continuar com Google</Text>
-                  </>
-                )}
-              </Pressable>
+                  <Pressable
+                    testID="signup-google-button"
+                    onPress={pressGoogle}
+                    disabled={googleLoading}
+                    style={({ pressed }) => [{
+                      flexDirection: "row", alignItems: "center", justifyContent: "center", gap: space.sm,
+                      height: 52, borderRadius: radius.md, borderWidth: 1.5, borderColor: colors.border,
+                      backgroundColor: colors.surface, opacity: pressed || googleLoading ? 0.7 : 1,
+                    }]}
+                  >
+                    {googleLoading ? <ActivityIndicator color={colors.ink} size="small" /> : (
+                      <>
+                        <Ionicons name="logo-google" size={18} color={colors.ink} />
+                        <Text style={{ color: colors.ink, fontFamily: fonts.bodyBold, fontSize: 15 }}>Continuar com Google</Text>
+                      </>
+                    )}
+                  </Pressable>
+                </>
+              )}
+            </Animated.View>
+          )}
+
+          {stepKey === "telefone" && (
+            <Animated.View entering={FadeInDown.duration(220)}>
+              <Text style={label}>Qual seu telefone?</Text>
+              <Text style={hint}>Usamos para confirmar sua conta e proteger pagamentos.</Text>
+              <Field
+                testID="signup-phone-input"
+                label="Telefone"
+                value={phone}
+                onChangeText={(v) => setPhone(formatPhoneBR(v))}
+                placeholder="(94) 99999-9999"
+                keyboardType="phone-pad"
+                autoComplete="tel"
+                autoFocus
+              />
             </Animated.View>
           )}
 
@@ -324,6 +368,23 @@ export default function Signup() {
                   );
                 })}
               </View>
+
+              <Pressable
+                testID="signup-terms-checkbox"
+                onPress={() => setAcceptTerms((v) => !v)}
+                style={{ flexDirection: "row", alignItems: "flex-start", gap: space.sm, marginTop: space.xl }}
+              >
+                <View style={{
+                  width: 22, height: 22, borderRadius: 6, marginTop: 1, alignItems: "center", justifyContent: "center",
+                  borderWidth: 1.5, borderColor: acceptTerms ? colors.primary : colors.border,
+                  backgroundColor: acceptTerms ? colors.primary : "transparent",
+                }}>
+                  {acceptTerms && <Ionicons name="checkmark" size={14} color={colors.onPrimary} />}
+                </View>
+                <Text style={{ flex: 1, color: colors.muted, ...type.small, lineHeight: 19 }}>
+                  Li e aceito os Termos de Uso e a Política de Privacidade do fazum.
+                </Text>
+              </Pressable>
             </Animated.View>
           )}
         </ScrollView>

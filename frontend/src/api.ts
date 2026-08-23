@@ -58,8 +58,15 @@ export type User = {
   id: string; name: string; initials: string; bio?: string; rating: number; rating_count: number;
   jobs_done: number; verified_identity: boolean; verified_email: boolean; verified_phone: boolean;
   level: string; member_since?: string; is_admin?: boolean; neighborhood_id?: string; city_id?: string;
-  preference?: "client" | "worker" | "both"; avatar_b64?: string | null;
+  state_id?: string; preference?: "client" | "worker" | "both"; avatar_b64?: string | null;
+  // Only present on the account owner's own view (private_user on the backend) —
+  // never present when viewing someone else's profile.
+  phone?: string | null; email_verified_at?: string | null; phone_verified_at?: string | null;
+  account_status?: "PENDING_VERIFICATION" | "ACTIVE" | "SUSPENDED" | "BLOCKED";
+  has_password?: boolean;
 };
+
+export type LinkedAccount = { provider: "GOOGLE" | "PASSWORD"; created_at: string };
 export type Order = {
   id: string; title: string; description: string; type: "favor" | "servico";
   category: { id: string; name: string; icon: string }; subcategory?: string;

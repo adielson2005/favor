@@ -8,6 +8,7 @@ import { useAuth } from "@/src/auth";
 import { Brand } from "@/src/components/Logo";
 import { Btn, Field } from "@/src/components/ui";
 import { fonts } from "@/src/hooks/use-app-fonts";
+import { useFeatureFlag } from "@/src/hooks/use-feature-flags";
 import { extractIdToken, useGoogleAuth } from "@/src/hooks/use-google-auth";
 import { useBreakpoint } from "@/src/hooks/use-breakpoint";
 import { radius, space, type, useTheme } from "@/src/theme";
@@ -27,18 +28,19 @@ export default function Login() {
   const insets = useSafeAreaInsets();
   const google = useGoogleAuth();
   const { isDesktop } = useBreakpoint();
+  const googleLoginEnabled = useFeatureFlag("GOOGLE_LOGIN");
 
-  const [email, setEmail] = useState("");
+  const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
   const [showDemo, setShowDemo] = useState(false);
 
   const submit = async () => {
-    if (!email.trim() || !password) return;
+    if (!identifier.trim() || !password) return;
     setLoading(true);
     try {
-      await login(email, password);
+      await login(identifier, password);
       router.replace("/");
     } catch (e: any) {
       Alert.alert("Não foi possível entrar", e.message || "Confira o e-mail e a senha.");
@@ -48,20 +50,23 @@ export default function Login() {
   };
 
   useEffect(() => {
+    // A user simply closing the Google account picker fires a "dismiss"/"cancel"
+    // response, not an error — nothing to alert about.
+    if (google.response?.type === "dismiss" || google.response?.type === "cancel") return;
     const idToken = extractIdToken(google.response);
     if (!idToken) return;
     (async () => {
       setGoogleLoading(true);
       try {
-        await loginWithGoogle(idToken);
-        router.replace("/");
+        const me = await loginWithGoogle(idToken, google.nonce);
+        router.replace(me.phone ? "/" : "/auth/complete-profile");
       } catch (e: any) {
         Alert.alert("Não foi possível entrar com o Google", e.message || "Tente novamente.");
       } finally {
         setGoogleLoading(false);
       }
     })();
-  }, [google.response, loginWithGoogle, router]);
+  }, [google.response, google.nonce, loginWithGoogle, router]);
 
   const pressGoogle = () => {
     if (!google.configured) {
@@ -74,37 +79,41 @@ export default function Login() {
   const formFields = (
     <>
       <View style={{ backgroundColor: colors.surface, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.border, padding: space.xl, gap: space.md }}>
-        <Field testID="login-email-input" label="E-mail" value={email} onChangeText={setEmail} placeholder="voce@email.com" autoCapitalize="none" keyboardType="email-address" />
+        <Field testID="login-email-input" label="E-mail ou telefone" value={identifier} onChangeText={setIdentifier} placeholder="voce@email.com ou (94) 99999-9999" autoCapitalize="none" />
         <Field testID="login-password-input" label="Senha" value={password} onChangeText={setPassword} placeholder="••••••••" secureTextEntry />
         <Pressable testID="login-forgot-password" onPress={() => router.push("/auth/forgot-password")} hitSlop={6} style={{ alignSelf: "flex-end", marginTop: -space.xs }}>
           <Text style={{ color: colors.primary, fontFamily: fonts.bodySemiBold, fontSize: 13 }}>Esqueci minha senha</Text>
         </Pressable>
-        <Btn testID="login-submit-button" title={loading ? "Entrando..." : "Entrar"} onPress={submit} disabled={!email.trim() || !password} loading={loading} />
+        <Btn testID="login-submit-button" title={loading ? "Entrando..." : "Entrar"} onPress={submit} disabled={!identifier.trim() || !password} loading={loading} />
       </View>
 
-      <View style={{ flexDirection: "row", alignItems: "center", gap: space.md, marginVertical: space.xs }}>
-        <View style={{ flex: 1, height: 1, backgroundColor: colors.border }} />
-        <Text style={{ color: colors.faint, ...type.micro }}>ou continue com</Text>
-        <View style={{ flex: 1, height: 1, backgroundColor: colors.border }} />
-      </View>
+      {googleLoginEnabled && (
+        <>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: space.md, marginVertical: space.xs }}>
+            <View style={{ flex: 1, height: 1, backgroundColor: colors.border }} />
+            <Text style={{ color: colors.faint, ...type.micro }}>ou continue com</Text>
+            <View style={{ flex: 1, height: 1, backgroundColor: colors.border }} />
+          </View>
 
-      <Pressable
-        testID="login-google-button"
-        onPress={pressGoogle}
-        disabled={googleLoading}
-        style={({ pressed }) => [{
-          flexDirection: "row", alignItems: "center", justifyContent: "center", gap: space.sm,
-          height: 52, borderRadius: radius.md, borderWidth: 1.5, borderColor: colors.border,
-          backgroundColor: colors.surface, opacity: pressed || googleLoading ? 0.7 : 1,
-        }]}
-      >
-        {googleLoading ? <ActivityIndicator color={colors.ink} size="small" /> : (
-          <>
-            <Ionicons name="logo-google" size={18} color={colors.ink} />
-            <Text style={{ color: colors.ink, fontFamily: fonts.bodyBold, fontSize: 15 }}>Continuar com Google</Text>
-          </>
-        )}
-      </Pressable>
+          <Pressable
+            testID="login-google-button"
+            onPress={pressGoogle}
+            disabled={googleLoading}
+            style={({ pressed }) => [{
+              flexDirection: "row", alignItems: "center", justifyContent: "center", gap: space.sm,
+              height: 52, borderRadius: radius.md, borderWidth: 1.5, borderColor: colors.border,
+              backgroundColor: colors.surface, opacity: pressed || googleLoading ? 0.7 : 1,
+            }]}
+          >
+            {googleLoading ? <ActivityIndicator color={colors.ink} size="small" /> : (
+              <>
+                <Ionicons name="logo-google" size={18} color={colors.ink} />
+                <Text style={{ color: colors.ink, fontFamily: fonts.bodyBold, fontSize: 15 }}>Continuar com Google</Text>
+              </>
+            )}
+          </Pressable>
+        </>
+      )}
 
       <Pressable testID="login-goto-signup" onPress={() => router.push("/auth/signup")} style={{ marginTop: space.lg, alignItems: "center" }} hitSlop={8}>
         <Text style={{ color: colors.muted, ...type.small }}>
@@ -127,7 +136,7 @@ export default function Login() {
               <Pressable
                 key={acc.email}
                 testID={`login-demo-${acc.label.toLowerCase()}`}
-                onPress={() => { setEmail(acc.email); setPassword(DEMO_PASSWORD); }}
+                onPress={() => { setIdentifier(acc.email); setPassword(DEMO_PASSWORD); }}
                 style={{ paddingHorizontal: space.md, height: 36, borderRadius: radius.pill, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, alignItems: "center", justifyContent: "center" }}
               >
                 <Text style={{ color: colors.ink, fontFamily: fonts.bodyBold, fontSize: 13 }}>{acc.label}</Text>

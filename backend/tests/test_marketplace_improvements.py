@@ -20,26 +20,27 @@ TEST_PASSWORD = "TestPass123!"
 TAG = f"MKT_{uuid.uuid4().hex[:6]}"
 
 
-@pytest.fixture(scope="session")
-def api():
-    s = requests.Session()
-    s.headers.update({"Content-Type": "application/json"})
-    return s
-
-
 def auth(token):
     return {"Authorization": f"Bearer {token}"}
+
+
+def _random_phone():
+    return "94" + "9" + f"{uuid.uuid4().int % 10**8:08d}"
 
 
 def _register(api, tag):
     email = f"{tag}_{uuid.uuid4().hex[:8]}@example.com"
     r = api.post(f"{API}/auth/register", json={
-        "name": f"Test {tag}", "email": email, "password": TEST_PASSWORD,
-        "city_id": "city-parauapebas", "neighborhood_id": "nb-19",
+        "name": f"Test {tag}", "email": email, "phone": _random_phone(), "password": TEST_PASSWORD,
+        "city_id": "city-parauapebas", "neighborhood_id": "nb-19", "accept_terms": True,
     }, timeout=15)
     assert r.status_code == 200, r.text
     body = r.json()
-    return body["token"], body["user"]["id"]
+    token, user_id = body["token"], body["user"]["id"]
+    hdrs = auth(token)
+    api.post(f"{API}/auth/verify-email", headers=hdrs, json={"code": body["dev_code_email"]}, timeout=15)
+    api.post(f"{API}/auth/verify-phone", headers=hdrs, json={"code": body["dev_code_phone"]}, timeout=15)
+    return token, user_id
 
 
 @pytest.fixture(scope="session")
@@ -70,13 +71,6 @@ def worker_token(_worker):
 @pytest.fixture(scope="session")
 def worker_id(_worker):
     return _worker[1]
-
-
-@pytest.fixture(scope="session")
-def admin_token(api):
-    r = api.post(f"{API}/auth/login", json={"email": ADMIN_EMAIL, "password": DEMO_PASSWORD}, timeout=15)
-    assert r.status_code == 200, r.text
-    return r.json()["token"]
 
 
 def make_order(api, client_token, budget=40, urgent=False, recurrence="none"):

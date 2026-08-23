@@ -43,7 +43,7 @@ export const type = {
   micro: { fontFamily: fonts.bodyBold, fontSize: 11, textTransform: "uppercase" as const, letterSpacing: 0.6 },
 };
 
-const ThemeContext = createContext<{ colors: Colors; isDark: boolean; pref: ThemePref; setPref: (p: ThemePref) => void }>({ colors: light, isDark: false, pref: "system", setPref: () => {} });
+export const ThemeContext = createContext<{ colors: Colors; isDark: boolean; pref: ThemePref; setPref: (p: ThemePref) => void }>({ colors: light, isDark: false, pref: "system", setPref: () => {} });
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const system = useColorScheme();

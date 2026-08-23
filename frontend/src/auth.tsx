@@ -9,13 +9,18 @@ type AuthState = {
   ready: boolean;
   token: string | null;
   user: User | null;
-  login: (email: string, password: string) => Promise<void>;
-  register: (data: { name: string; email: string; password: string; city_id: string; neighborhood_id?: string | null; preference?: "client" | "worker" | "both" }) => Promise<void>;
-  loginWithGoogle: (idToken: string, cityId?: string) => Promise<void>;
+  login: (identifier: string, password: string) => Promise<void>;
+  register: (data: { name: string; email: string; phone: string; password: string; city_id: string; neighborhood_id?: string | null; preference?: "client" | "worker" | "both"; accept_terms: boolean }) => Promise<void>;
+  loginWithGoogle: (idToken: string, nonce?: string, cityId?: string) => Promise<User>;
   logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
   changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
   deleteAccount: () => Promise<void>;
+  // For endpoints other than login/register that also issue a fresh session (e.g.
+  // change-email/change-phone, which invalidate the caller's own token as a side
+  // effect of the account change) — lets the caller carry on with the new token
+  // instead of being forced to log in again mid-flow.
+  syncSession: (token: string, user: User) => Promise<void>;
 };
 
 const AuthContext = createContext<AuthState>(null as never);
@@ -53,27 +58,33 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     })();
   }, []);
 
-  const login = useCallback(async (email: string, password: string) => {
-    const data = await api.post("/auth/login", { email: email.trim().toLowerCase(), password });
+  const login = useCallback(async (identifier: string, password: string) => {
+    const data = await api.post("/auth/login", { identifier: identifier.trim(), password });
     await storage.secureSet(TOKEN_KEY, data.token);
     applySession(data.token, data.user);
   }, [applySession]);
 
-  const register = useCallback(async (payload: { name: string; email: string; password: string; city_id: string; neighborhood_id?: string | null; preference?: "client" | "worker" | "both" }) => {
+  const register = useCallback(async (payload: { name: string; email: string; phone: string; password: string; city_id: string; neighborhood_id?: string | null; preference?: "client" | "worker" | "both"; accept_terms: boolean }) => {
     const data = await api.post("/auth/register", payload);
     await storage.secureSet(TOKEN_KEY, data.token);
     applySession(data.token, data.user);
   }, [applySession]);
 
-  const loginWithGoogle = useCallback(async (idToken: string, cityId?: string) => {
-    const data = await api.post("/auth/google", { id_token: idToken, city_id: cityId || "city-parauapebas" });
+  const loginWithGoogle = useCallback(async (idToken: string, nonce?: string, cityId?: string) => {
+    const data = await api.post("/auth/google", { id_token: idToken, nonce, city_id: cityId || "city-parauapebas" });
     await storage.secureSet(TOKEN_KEY, data.token);
     applySession(data.token, data.user);
+    return data.user as User;
   }, [applySession]);
 
   const changePassword = useCallback(async (currentPassword: string, newPassword: string) => {
     await api.post("/auth/change-password", { current_password: currentPassword, new_password: newPassword });
   }, []);
+
+  const syncSession = useCallback(async (nextToken: string, nextUser: User) => {
+    await storage.secureSet(TOKEN_KEY, nextToken);
+    applySession(nextToken, nextUser);
+  }, [applySession]);
 
   const deleteAccount = useCallback(async () => {
     await api.del("/auth/me");
@@ -97,8 +108,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch { /* keep last known user */ }
   }, []);
 
-  const value = useMemo(() => ({ ready, token, user, login, register, loginWithGoogle, logout, refreshUser, changePassword, deleteAccount }),
-    [ready, token, user, login, register, loginWithGoogle, logout, refreshUser, changePassword, deleteAccount]);
+  const value = useMemo(() => ({ ready, token, user, login, register, loginWithGoogle, logout, refreshUser, changePassword, deleteAccount, syncSession }),
+    [ready, token, user, login, register, loginWithGoogle, logout, refreshUser, changePassword, deleteAccount, syncSession]);
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 

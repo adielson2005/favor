@@ -101,6 +101,7 @@ export default function Profile() {
   const savePassword = async () => {
     if (newPassword.length < 8) { Alert.alert("Senha muito curta", "Use pelo menos 8 caracteres."); return; }
     if (newPassword !== confirmPassword) { Alert.alert("As senhas não coincidem", "Confira e tente de novo."); return; }
+    const wasCreating = !me.has_password;
     setSaving(true);
     try {
       await changePassword(currentPassword, newPassword);
@@ -109,10 +110,10 @@ export default function Profile() {
       // The backend invalidates this session as part of the password change, so the
       // cached token is already stale — log out and send the user to log in again.
       await logout();
-      Alert.alert("Pronto", "Sua senha foi alterada. Entre novamente.");
+      Alert.alert("Pronto", wasCreating ? "Sua senha foi criada. Entre novamente." : "Sua senha foi alterada. Entre novamente.");
       router.replace("/auth/welcome");
     } catch (e: any) {
-      Alert.alert("Não foi possível trocar a senha", e.message || "Confira a senha atual.");
+      Alert.alert(wasCreating ? "Não foi possível criar a senha" : "Não foi possível trocar a senha", e.message || "Tente novamente.");
     } finally { setSaving(false); }
   };
 
@@ -232,12 +233,19 @@ export default function Profile() {
       </Sheet>
 
       {/* Change password */}
-      <Sheet visible={passwordOpen} onClose={() => setPasswordOpen(false)} title="Alterar senha">
+      <Sheet visible={passwordOpen} onClose={() => setPasswordOpen(false)} title={me.has_password ? "Alterar senha" : "Criar senha"}>
         <View style={{ gap: 14, paddingVertical: 12, paddingBottom: 24 }}>
-          <Field label="Senha atual" value={currentPassword} onChangeText={setCurrentPassword} secureTextEntry testID="current-password-input" />
+          {!me.has_password && (
+            <Text style={{ color: colors.muted, fontSize: 13, lineHeight: 19 }}>
+              Sua conta ainda não tem senha (você entra só com o Google). Crie uma para também poder entrar com e-mail ou telefone.
+            </Text>
+          )}
+          {me.has_password && (
+            <Field label="Senha atual" value={currentPassword} onChangeText={setCurrentPassword} secureTextEntry testID="current-password-input" />
+          )}
           <Field label="Nova senha" value={newPassword} onChangeText={setNewPassword} placeholder="Mínimo 8 caracteres" secureTextEntry testID="new-password-input" />
           <Field label="Confirmar nova senha" value={confirmPassword} onChangeText={setConfirmPassword} secureTextEntry testID="confirm-password-input" />
-          <Btn title="Salvar" onPress={savePassword} loading={saving} disabled={!currentPassword || !newPassword || !confirmPassword} testID="save-password-button" />
+          <Btn title="Salvar" onPress={savePassword} loading={saving} disabled={(me.has_password && !currentPassword) || !newPassword || !confirmPassword} testID="save-password-button" />
         </View>
       </Sheet>
 

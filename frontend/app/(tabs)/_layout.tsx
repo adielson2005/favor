@@ -8,6 +8,7 @@ import { Brand, LogoMark } from "@/src/components/Logo";
 import { Avatar, Btn } from "@/src/components/ui";
 import { fonts } from "@/src/hooks/use-app-fonts";
 import { useBreakpoint } from "@/src/hooks/use-breakpoint";
+import { useFeatureFlag } from "@/src/hooks/use-feature-flags";
 import { useRequireAuth } from "@/src/hooks/use-require-auth";
 import { useApp } from "@/src/state";
 import { radius, space, useTheme } from "@/src/theme";
@@ -33,15 +34,17 @@ function TabBar({ state, navigation }: any) {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const { isDesktop } = useBreakpoint();
+  const walletEnabled = useFeatureFlag("WALLET");
   if (isDesktop) return null;
   const activeRoute = state.routes[state.index]?.name;
+  const visibleTabs = TABS.filter((t) => t.name !== "wallet" || walletEnabled);
 
   return (
     <View style={{
       flexDirection: "row", backgroundColor: colors.surface, borderTopWidth: 1, borderTopColor: colors.border,
       paddingBottom: Math.max(insets.bottom, Platform.OS === "ios" ? 20 : 10), paddingTop: 8, paddingHorizontal: 8,
     }}>
-      {TABS.map((tab) => {
+      {visibleTabs.map((tab) => {
         const active = activeRoute === tab.name;
         return (
           <Pressable
@@ -68,6 +71,8 @@ function Navbar() {
   const pathname = usePathname();
   const insets = useSafeAreaInsets();
   const { me, unread } = useApp();
+  const walletEnabled = useFeatureFlag("WALLET");
+  const visibleTabs = TABS.filter((t) => t.name !== "wallet" || walletEnabled);
 
   return (
     <View style={{ backgroundColor: colors.surface, borderBottomWidth: 1, borderBottomColor: colors.border, paddingTop: insets.top }}>
@@ -80,7 +85,7 @@ function Navbar() {
         </Pressable>
 
         <View style={{ flexDirection: "row", alignItems: "center", gap: space.xl }}>
-          {TABS.map((tab) => {
+          {visibleTabs.map((tab) => {
             const active = pathname.startsWith(`/${tab.name}`);
             return (
               <Pressable key={tab.name} testID={`navbar-${tab.name}`} onPress={() => router.push(`/${tab.name}` as never)} style={{ paddingVertical: space.sm }}>

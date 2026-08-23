@@ -6,20 +6,45 @@ from pydantic import BaseModel, EmailStr, Field
 class RegisterIn(BaseModel):
     name: str
     email: EmailStr
+    phone: str
     password: str = Field(min_length=8)
     city_id: str
     neighborhood_id: Optional[str] = None
     preference: Optional[str] = None  # client | worker | both
+    accept_terms: bool = False
 
 
 class LoginIn(BaseModel):
+    identifier: str  # email or phone (E.164 or typed with punctuation)
+    password: str
+
+
+class VerifyPhoneIn(BaseModel):
+    code: str
+
+
+class ChangePhoneIn(BaseModel):
+    phone: str
+    # Optional: a user completing their profile for the first time (e.g. a new Google
+    # account with no phone yet) has no existing phone to protect, so no reauth is
+    # required. Required once the account already has a phone — see change_phone().
+    password: Optional[str] = None
+
+
+class ChangeEmailIn(BaseModel):
     email: EmailStr
     password: str
 
 
 class GoogleAuthIn(BaseModel):
     id_token: str
+    nonce: Optional[str] = None  # replay protection — checked against the token's own nonce claim
     city_id: str = "city-parauapebas"  # used only when this Google sign-in creates a brand-new account
+
+
+class GoogleLinkIn(BaseModel):
+    id_token: str
+    nonce: Optional[str] = None
 
 
 class ForgotPasswordIn(BaseModel):
@@ -114,7 +139,9 @@ class ProfileUpdate(BaseModel):
 
 
 class ChangePasswordIn(BaseModel):
-    current_password: str
+    # Optional so a Google-only account (no password_hash yet) can set its FIRST
+    # password through this same endpoint — there's no "current" one to check yet.
+    current_password: Optional[str] = None
     new_password: str = Field(min_length=8)
 
 
@@ -214,6 +241,10 @@ class AdminDisputeActionIn(BaseModel):
     resolution_action: str = "none"  # refund_client | release_worker | none
 
 
+class AdminAccountStatusIn(BaseModel):
+    status: str  # ACTIVE | SUSPENDED | BLOCKED
+
+
 class AdminRiskFlagActionIn(BaseModel):
     status: str  # RESOLVED | DISMISSED
     note: str = ""
@@ -235,3 +266,61 @@ class CommissionConfigIn(BaseModel):
     min_withdrawal: Optional[float] = Field(default=None, ge=0)
     max_withdrawal_per_day: Optional[float] = Field(default=None, ge=0)
     max_deposit_per_transaction: Optional[float] = Field(default=None, ge=0)
+
+
+# ---------- admin panel (RBAC) ----------
+
+class AdminLoginIn(BaseModel):
+    email: EmailStr
+    password: str
+    totp_code: Optional[str] = None
+
+
+class AdminUserCreateIn(BaseModel):
+    name: str
+    email: EmailStr
+    password: str = Field(min_length=8)
+    role: str  # OWNER | MANAGER | SUPPORT | MAINTENANCE
+
+
+class AdminUserPatchIn(BaseModel):
+    name: Optional[str] = None
+    role: Optional[str] = None
+    active: Optional[bool] = None
+
+
+class Admin2FAVerifyIn(BaseModel):
+    code: str
+
+
+class FeatureFlagPatchIn(BaseModel):
+    enabled: bool
+
+
+# ---------- support / feedback tickets ----------
+
+TICKET_CATEGORIES = ("BUG", "IDEIA", "SUGESTAO", "RECLAMACAO", "PAGAMENTO", "CONTA", "SEGURANCA", "OUTRO")
+TICKET_STATUSES = ("OPEN", "IN_PROGRESS", "WAITING_USER", "RESOLVED", "CLOSED")
+
+
+class TicketCreate(BaseModel):
+    category: str
+    subject: str = Field(min_length=3, max_length=140)
+    description: str = Field(min_length=1, max_length=4000)
+
+
+class TicketMessageIn(BaseModel):
+    text: str = Field(min_length=1, max_length=4000)
+
+
+class AdminTicketActionIn(BaseModel):
+    status: Optional[str] = None
+    category: Optional[str] = None
+    assigned_to: Optional[str] = None
+    transfer_to_maintenance: Optional[bool] = None
+
+
+class NotificationSendIn(BaseModel):
+    title: str = Field(min_length=1, max_length=120)
+    body: str = Field(min_length=1, max_length=1000)
+    target: str  # "all" | "user:{id}" | "city:{id}" | "category:{client|worker|both}"

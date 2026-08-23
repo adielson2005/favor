@@ -24,28 +24,32 @@ TEST_PASSWORD = "TestPass123!"
 TAG = f"FIN_{uuid.uuid4().hex[:6]}"
 
 
-@pytest.fixture(scope="session")
-def api():
-    s = requests.Session()
-    s.headers.update({"Content-Type": "application/json"})
-    return s
-
-
 def _login(api, email):
-    r = api.post(f"{API}/auth/login", json={"email": email, "password": DEMO_PASSWORD}, timeout=15)
+    r = api.post(f"{API}/auth/login", json={"identifier": email, "password": DEMO_PASSWORD}, timeout=15)
     assert r.status_code == 200, r.text
     return r.json()["token"]
+
+
+def _random_phone():
+    return "94" + "9" + f"{uuid.uuid4().int % 10**8:08d}"
 
 
 def _register(api, tag):
     email = f"{tag}_{uuid.uuid4().hex[:8]}@example.com"
     r = api.post(f"{API}/auth/register", json={
-        "name": f"Test {tag}", "email": email, "password": TEST_PASSWORD,
-        "city_id": "city-parauapebas", "neighborhood_id": "nb-19",
+        "name": f"Test {tag}", "email": email, "phone": _random_phone(), "password": TEST_PASSWORD,
+        "city_id": "city-parauapebas", "neighborhood_id": "nb-19", "accept_terms": True,
     }, timeout=15)
     assert r.status_code == 200, r.text
     body = r.json()
-    return body["token"], body["user"]["id"]
+    token, user_id = body["token"], body["user"]["id"]
+    # Financial actions require an ACTIVE (both email+phone verified) account — no real
+    # SMTP/SMS is configured in this environment, so the register response carries the
+    # dev-mode codes directly; use them to activate right away like a real user would.
+    hdrs = {"Authorization": f"Bearer {token}"}
+    api.post(f"{API}/auth/verify-email", headers=hdrs, json={"code": body["dev_code_email"]}, timeout=15)
+    api.post(f"{API}/auth/verify-phone", headers=hdrs, json={"code": body["dev_code_phone"]}, timeout=15)
+    return token, user_id
 
 
 # The financial suite creates many orders/payments/notifications per run. Reusing
@@ -90,11 +94,6 @@ def worker_id(_worker):
 @pytest.fixture(scope="session")
 def outsider_token(_outsider):
     return _outsider[0]
-
-
-@pytest.fixture(scope="session")
-def admin_token(api):
-    return _login(api, ADMIN_EMAIL)
 
 
 def auth(token):
@@ -154,9 +153,11 @@ def test_admin_adjustment_is_the_only_way_to_set_balance(api, admin_token, clien
 
 
 def test_non_admin_cannot_adjust_wallet(api, client_token, client_id):
+    # Admin sessions are a separate identity system now — a consumer token isn't a
+    # valid admin session at all (401), not merely an admin lacking permission (403).
     r = api.post(f"{API}/admin/wallets/{client_id}/adjust", headers=auth(client_token),
                  json={"user_id": client_id, "amount": 999, "reason": "attack"}, timeout=15)
-    assert r.status_code == 403
+    assert r.status_code == 401
 
 
 # ---------- payment: never trust the frontend ----------
@@ -345,8 +346,10 @@ def test_concurrent_withdrawals_cannot_both_succeed_past_balance(api, admin_toke
     ("get", "/admin/wallets/demo-client"),
 ])
 def test_admin_financial_routes_reject_non_admin(api, client_token, method, path):
+    # Consumer token is 401 here, not 403 — admin sessions are a separate identity
+    # system now, not a permission tier on the same session.
     r = getattr(api, method)(f"{API}{path}", headers=auth(client_token), timeout=15)
-    assert r.status_code == 403
+    assert r.status_code == 401
 
 
 def test_admin_financial_routes_reject_no_auth(api):

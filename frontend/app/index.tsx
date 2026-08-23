@@ -10,7 +10,7 @@ import { storage } from "@/src/utils/storage";
 export default function Gate() {
   const router = useRouter();
   const { colors } = useTheme();
-  const { ready, token } = useAuth();
+  const { ready, token, user } = useAuth();
 
   useEffect(() => {
     if (!ready) return;
@@ -18,10 +18,17 @@ export default function Gate() {
       router.replace("/auth/welcome");
       return;
     }
+    // Safety net for anyone who left mid Google sign-up before finishing the
+    // complete-profile phone step (e.g. closed the app) — login/signup already
+    // redirect there right after a fresh Google sign-in.
+    if (user && !user.phone) {
+      router.replace("/auth/complete-profile");
+      return;
+    }
     storage.getItem("faze:onboarded", false).then((seen) => {
       router.replace(seen ? "/(tabs)/home" : "/onboarding");
     });
-  }, [ready, token, router]);
+  }, [ready, token, user, router]);
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg, alignItems: "center", justifyContent: "center", gap: 20 }}>

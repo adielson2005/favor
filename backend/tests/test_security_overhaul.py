@@ -37,32 +37,34 @@ TEST_PASSWORD = "TestPass123!"
 TAG = f"SEC_{uuid.uuid4().hex[:6]}"
 
 
-@pytest.fixture(scope="session")
-def api():
-    s = requests.Session()
-    s.headers.update({"Content-Type": "application/json"})
-    return s
-
-
 def auth(token):
     return {"Authorization": f"Bearer {token}"}
 
 
 def _login(api, email, password=DEMO_PASSWORD):
-    r = api.post(f"{API}/auth/login", json={"email": email, "password": password}, timeout=15)
+    r = api.post(f"{API}/auth/login", json={"identifier": email, "password": password}, timeout=15)
     assert r.status_code == 200, r.text
     return r.json()["token"]
 
 
-def _register(api, tag):
+def _random_phone():
+    return "94" + "9" + f"{uuid.uuid4().int % 10**8:08d}"
+
+
+def _register(api, tag, activate=True):
     email = f"{tag}_{uuid.uuid4().hex[:8]}@example.com"
     r = api.post(f"{API}/auth/register", json={
-        "name": f"Test {tag}", "email": email, "password": TEST_PASSWORD,
-        "city_id": "city-parauapebas", "neighborhood_id": "nb-19",
+        "name": f"Test {tag}", "email": email, "phone": _random_phone(), "password": TEST_PASSWORD,
+        "city_id": "city-parauapebas", "neighborhood_id": "nb-19", "accept_terms": True,
     }, timeout=15)
     assert r.status_code == 200, r.text
     body = r.json()
-    return body["token"], body["user"]["id"]
+    token, user_id = body["token"], body["user"]["id"]
+    if activate:
+        hdrs = auth(token)
+        api.post(f"{API}/auth/verify-email", headers=hdrs, json={"code": body["dev_code_email"]}, timeout=15)
+        api.post(f"{API}/auth/verify-phone", headers=hdrs, json={"code": body["dev_code_phone"]}, timeout=15)
+    return token, user_id
 
 
 @pytest.fixture(scope="session")
@@ -103,11 +105,6 @@ def worker_id(_worker):
 @pytest.fixture(scope="session")
 def outsider_token(_outsider):
     return _outsider[0]
-
-
-@pytest.fixture(scope="session")
-def admin_token(api):
-    return _login(api, ADMIN_EMAIL)
 
 
 def credit(api, admin_token, user_id, amount, reason=None):
@@ -320,9 +317,11 @@ def test_non_admin_cannot_resolve_dispute(api, client_token, worker_token, admin
     d = api.post(f"{API}/disputes", headers=auth(client_token), json={
         "target_type": "service", "order_id": order_id, "reason": "Outro", "description": "test",
     }, timeout=15)
+    # Admin sessions are a separate identity system — a consumer token is 401 here,
+    # not merely a 403 "admin without permission".
     r = api.patch(f"{API}/admin/disputes/{d.json()['id']}", headers=auth(client_token),
                   json={"status": "RESOLVED", "resolution_action": "refund_client"}, timeout=15)
-    assert r.status_code == 403
+    assert r.status_code == 401
 
 
 # ---------- 4/5/6. duplicate payment / webhook / withdrawal ----------
@@ -525,7 +524,7 @@ def test_critical_risk_payment_is_blocked_and_flagged(api, worker_token, admin_t
 
 def test_non_admin_cannot_access_risk_flags(api, client_token):
     r = api.get(f"{API}/admin/risk-flags", headers=auth(client_token), timeout=15)
-    assert r.status_code == 403
+    assert r.status_code == 401
 
 
 # ---------- 10. compromised account / audit trail ----------
@@ -537,7 +536,7 @@ def test_repeated_failed_logins_get_rate_limited():
     email = f"{TAG}_lockout@example.com"
     codes = []
     for _ in range(12):
-        r = requests.post(f"{API}/auth/login", json={"email": email, "password": "wrong-password"}, timeout=15)
+        r = requests.post(f"{API}/auth/login", json={"identifier": email, "password": "wrong-password"}, timeout=15)
         codes.append(r.status_code)
     assert 429 in codes, f"expected a 429 after repeated failed logins, got {codes}"
 
@@ -552,12 +551,12 @@ def test_bank_account_changes_create_security_events(api, admin_token):
 def test_login_creates_security_event(api, admin_token):
     email = f"{TAG}_login_evt@example.com"
     reg = api.post(f"{API}/auth/register", json={
-        "name": "Login Event Test", "email": email, "password": TEST_PASSWORD,
-        "city_id": "city-parauapebas", "neighborhood_id": "nb-19",
+        "name": "Login Event Test", "email": email, "phone": _random_phone(), "password": TEST_PASSWORD,
+        "city_id": "city-parauapebas", "neighborhood_id": "nb-19", "accept_terms": True,
     }, timeout=15)
     assert reg.status_code == 200, reg.text
     user_id = reg.json()["user"]["id"]
-    login = api.post(f"{API}/auth/login", json={"email": email, "password": TEST_PASSWORD}, timeout=15)
+    login = api.post(f"{API}/auth/login", json={"identifier": email, "password": TEST_PASSWORD}, timeout=15)
     assert login.status_code == 200, login.text
     events = api.get(f"{API}/admin/security-events?user_id={user_id}", headers=auth(admin_token), timeout=15).json()
     assert any(e["event"] == "login" for e in events)
@@ -565,7 +564,7 @@ def test_login_creates_security_event(api, admin_token):
 
 def test_non_admin_cannot_access_security_events(api, client_token):
     r = api.get(f"{API}/admin/security-events", headers=auth(client_token), timeout=15)
-    assert r.status_code == 403
+    assert r.status_code == 401
 
 
 # ---------- 11. session revocation (token_version) ----------
@@ -586,8 +585,8 @@ def test_password_change_invalidates_old_token(api):
 def test_reset_password_invalidates_old_token(api):
     email = f"{TAG}_revoke_reset_{uuid.uuid4().hex[:8]}@example.com"
     reg = api.post(f"{API}/auth/register", json={
-        "name": "Revoke Reset Test", "email": email, "password": TEST_PASSWORD,
-        "city_id": "city-parauapebas", "neighborhood_id": "nb-19",
+        "name": "Revoke Reset Test", "email": email, "phone": _random_phone(), "password": TEST_PASSWORD,
+        "city_id": "city-parauapebas", "neighborhood_id": "nb-19", "accept_terms": True,
     }, timeout=15)
     assert reg.status_code == 200, reg.text
     old_token = reg.json()["token"]
@@ -603,7 +602,7 @@ def test_reset_password_invalidates_old_token(api):
     stale = api.get(f"{API}/auth/me", headers=auth(old_token), timeout=15)
     assert stale.status_code == 401, stale.text
 
-    fresh_login = api.post(f"{API}/auth/login", json={"email": email, "password": "NewPass789!"}, timeout=15)
+    fresh_login = api.post(f"{API}/auth/login", json={"identifier": email, "password": "NewPass789!"}, timeout=15)
     assert fresh_login.status_code == 200, fresh_login.text
     new_me = api.get(f"{API}/auth/me", headers=auth(fresh_login.json()["token"]), timeout=15)
     assert new_me.status_code == 200, new_me.text
@@ -623,4 +622,4 @@ def test_admin_revoke_sessions_invalidates_token(api, admin_token):
 
 def test_non_admin_cannot_revoke_sessions(api, client_token, worker_id):
     r = api.post(f"{API}/admin/users/{worker_id}/revoke-sessions", headers=auth(client_token), timeout=15)
-    assert r.status_code == 403
+    assert r.status_code == 401

@@ -11,6 +11,7 @@ import { FazumPayMark } from "@/src/components/Logo";
 import { Skeleton } from "@/src/components/ui";
 import { TransactionRow } from "@/src/components/WalletComponents";
 import { fonts } from "@/src/hooks/use-app-fonts";
+import { useFeatureFlag } from "@/src/hooks/use-feature-flags";
 import { useRequireAuth } from "@/src/hooks/use-require-auth";
 import { radius, space, type, useTheme } from "@/src/theme";
 import { safeBack } from "@/src/utils/navigation";
@@ -23,6 +24,7 @@ export default function WalletHome() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   useRequireAuth();
+  const withdrawEnabled = useFeatureFlag("WITHDRAWAL");
 
   const [wallet, setWallet] = useState<Wallet | null>(null);
   const [recent, setRecent] = useState<WalletTransaction[]>([]);
@@ -96,7 +98,7 @@ export default function WalletHome() {
 
             <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
               <CircleAction testID="wallet-deposit-button" icon="add" label="Depositar" onPress={() => router.push("/wallet/deposit")} />
-              <CircleAction testID="wallet-withdraw-button" icon="arrow-up" label="Sacar" onPress={() => router.push("/wallet/withdraw")} />
+              {withdrawEnabled && <CircleAction testID="wallet-withdraw-button" icon="arrow-up" label="Sacar" onPress={() => router.push("/wallet/withdraw")} />}
               <CircleAction testID="wallet-earnings-button" icon="trending-up" label="Ganhos" onPress={() => router.push("/wallet/earnings")} />
               <CircleAction testID="wallet-extract-button" icon="receipt" label="Extrato" onPress={() => router.push("/wallet/extract")} />
               <CircleAction testID="wallet-bank-accounts-button" icon="card" label="Contas" onPress={() => router.push("/wallet/bank-accounts")} />

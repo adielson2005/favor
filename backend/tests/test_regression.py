@@ -25,17 +25,14 @@ DEMO_PASSWORD = "faze2024"
 TAG = f"TEST_{uuid.uuid4().hex[:6]}"
 
 
-@pytest.fixture(scope="session")
-def api():
-    s = requests.Session()
-    s.headers.update({"Content-Type": "application/json"})
-    return s
-
-
 def _login(api, email):
-    r = api.post(f"{BASE_URL}/api/auth/login", json={"email": email, "password": DEMO_PASSWORD}, timeout=15)
+    r = api.post(f"{BASE_URL}/api/auth/login", json={"identifier": email, "password": DEMO_PASSWORD}, timeout=15)
     assert r.status_code == 200, r.text
     return r.json()["token"]
+
+
+def _random_phone():
+    return "94" + "9" + f"{uuid.uuid4().int % 10**8:08d}"
 
 
 @pytest.fixture(scope="session")
@@ -49,8 +46,19 @@ def worker_token(api):
 
 
 @pytest.fixture(scope="session")
-def admin_token(api):
-    return _login(api, ADMIN_EMAIL)
+def outsider_token(api):
+    # A logged-in stranger who is never a participant in `created_order` — used to
+    # assert chat/order endpoints reject non-participants. admin_token used to double
+    # as "any authenticated non-participant" here, but admin sessions are now a
+    # completely separate identity system that consumer endpoints correctly reject
+    # outright (not participant-checked), so this needs its own real account.
+    email = f"{TAG.lower()}_outsider@fazum.demo"
+    r = api.post(f"{BASE_URL}/api/auth/register", json={
+        "name": "Outsider Regressão", "email": email, "phone": _random_phone(), "password": "senha1234",
+        "city_id": "city-parauapebas", "accept_terms": True,
+    }, timeout=10)
+    assert r.status_code == 200, r.text
+    return r.json()["token"]
 
 
 def auth(token):
@@ -60,14 +68,15 @@ def auth(token):
 # ---------- auth ----------
 
 def test_login_wrong_password_rejected(api):
-    r = api.post(f"{BASE_URL}/api/auth/login", json={"email": CLIENT_EMAIL, "password": "wrong-password"}, timeout=10)
+    r = api.post(f"{BASE_URL}/api/auth/login", json={"identifier": CLIENT_EMAIL, "password": "wrong-password"}, timeout=10)
     assert r.status_code == 401
 
 
 def test_register_and_me(api):
     email = f"{TAG.lower()}@fazum.demo"
     r = api.post(f"{BASE_URL}/api/auth/register", json={
-        "name": "Teste Regressão", "email": email, "password": "senha1234", "city_id": "city-parauapebas",
+        "name": "Teste Regressão", "email": email, "phone": _random_phone(), "password": "senha1234",
+        "city_id": "city-parauapebas", "accept_terms": True,
     }, timeout=10)
     assert r.status_code == 200, r.text
     token = r.json()["token"]
@@ -260,12 +269,12 @@ def test_reviews_mutual_and_duplicate_blocked(api, created_order, client_token, 
 
 # ---------- chat ----------
 
-def test_chat_only_participants(api, created_order, client_token, admin_token):
-    # a logged-in stranger (admin account, not a participant) can't send or read
+def test_chat_only_participants(api, created_order, client_token, outsider_token):
+    # a logged-in stranger (not a participant) can't send or read
     r_bad = api.post(f"{BASE_URL}/api/orders/{created_order['id']}/messages",
-                     json={"text": f"{TAG} sneak"}, headers=auth(admin_token), timeout=10)
+                     json={"text": f"{TAG} sneak"}, headers=auth(outsider_token), timeout=10)
     assert r_bad.status_code == 403
-    r_bad_read = api.get(f"{BASE_URL}/api/orders/{created_order['id']}/messages", headers=auth(admin_token), timeout=10)
+    r_bad_read = api.get(f"{BASE_URL}/api/orders/{created_order['id']}/messages", headers=auth(outsider_token), timeout=10)
     assert r_bad_read.status_code == 403
     r_ok = api.post(f"{BASE_URL}/api/orders/{created_order['id']}/messages",
                     json={"text": f"{TAG} hello"}, headers=auth(client_token), timeout=10)
@@ -310,8 +319,12 @@ def test_notifications_flow(api, worker_token):
 # ---------- admin ----------
 
 def test_admin_requires_admin_token(api, client_token):
+    # Admin sessions are now a completely separate identity system (db.admin_users,
+    # its own JWT typ) — a regular consumer token isn't just "an admin without the
+    # is_admin flag" anymore, it's not a valid admin session at all, hence 401
+    # (unauthenticated for this realm) rather than 403 (authenticated, forbidden).
     r = api.get(f"{BASE_URL}/api/admin/overview", headers=auth(client_token), timeout=10)
-    assert r.status_code == 403
+    assert r.status_code == 401
 
 
 def test_admin_requires_any_token(api):

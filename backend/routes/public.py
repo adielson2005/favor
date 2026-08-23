@@ -7,7 +7,9 @@ from pymongo import ReturnDocument
 from auth import get_current_user, get_optional_user, rate_limit, verify_password
 from chat_safety import scan_message_for_external_payment
 from database import db, new_id, now
+from feature_flags import get_flags
 from fraud import check_payment_risk, create_risk_flag
+from verification import require_active_account
 from models import (BlockCreate, FavoriteToggle, MessageCreate, OrderCreate, OrderUpdate,
                     PayOrderIn, ProfileUpdate, ProposalCreate, ReportCreate, ReviewCreate)
 from wallet import (
@@ -53,9 +55,28 @@ def user_level(user: dict) -> str:
 
 
 def public_user(user: Optional[dict]) -> Optional[dict]:
+    # Shared by every "show info about this OTHER user" call site (order client/worker,
+    # review authors, proposal workers, the bootstrap users list, blocked-user rows) —
+    # anything added here becomes visible to every other user, not just the account
+    # owner. Private fields (phone number, verification timestamps, account_status)
+    # belong on private_user() below instead, never here.
     if not user:
         return None
-    return {k: user.get(k) for k in ("id", "name", "initials", "bio", "rating", "rating_count", "jobs_done", "city_id", "neighborhood_id", "preference", "avatar_b64", "verified_email", "verified_phone", "verified_identity", "member_since", "is_admin")} | {"level": user_level(user)}
+    return {k: user.get(k) for k in (
+        "id", "name", "initials", "bio", "rating", "rating_count", "jobs_done", "city_id", "neighborhood_id",
+        "state_id", "preference", "avatar_b64", "verified_email", "verified_phone", "verified_identity",
+        "member_since", "is_admin",
+    )} | {"level": user_level(user)}
+
+
+def private_user(user: Optional[dict]) -> Optional[dict]:
+    """The account owner's own view of themselves — /auth/me, register/login/verify
+    responses. Adds fields that must never leak to other users viewing this profile."""
+    if not user:
+        return None
+    return public_user(user) | {k: user.get(k) for k in (
+        "phone", "email_verified_at", "phone_verified_at", "account_status",
+    )} | {"has_password": bool(user.get("password_hash"))}
 
 
 async def ref_maps():
@@ -123,7 +144,13 @@ async def bootstrap():
     subs = await db.subcategories.find({"active": True}, {"_id": 0}).to_list(500)
     for c in categories:
         c["subcategories"] = [s for s in subs if s["category_id"] == c["id"]]
-    return {"users": [public_user(u) for u in users], "states": states, "cities": cities, "neighborhoods": hoods, "categories": categories}
+    flags = await get_flags()
+    return {"users": [public_user(u) for u in users], "states": states, "cities": cities, "neighborhoods": hoods, "categories": categories, "feature_flags": flags}
+
+
+@router.get("/feature-flags")
+async def feature_flags():
+    return await get_flags()
 
 
 @router.get("/geo/states")
@@ -289,6 +316,7 @@ async def update_order(order_id: str, body: OrderUpdate, current=Depends(get_cur
 @router.post("/orders/{order_id}/pay")
 async def pay_order(order_id: str, body: PayOrderIn, request: Request, current=Depends(get_current_user), idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key")):
     rate_limit(f"pay-order:{current['id']}", max_attempts=20, window_seconds=600)
+    require_active_account(current)
     order = await db.orders.find_one({"id": order_id})
     if not order:
         raise HTTPException(404, "Pedido não encontrado")
@@ -470,8 +498,16 @@ async def cancel_order(order_id: str, current=Depends(get_current_user)):
 # ---------- proposals ----------
 
 @router.get("/orders/{order_id}/proposals")
-async def order_proposals(order_id: str):
-    proposals = await db.proposals.find({"order_id": order_id}, {"_id": 0}).sort("created_at", -1).to_list(50)
+async def order_proposals(order_id: str, current=Depends(get_current_user)):
+    order = await db.orders.find_one({"id": order_id}, {"client_id": 1})
+    if not order:
+        raise HTTPException(404, "Pedido não encontrado")
+    query: dict = {"order_id": order_id}
+    if current["id"] != order["client_id"]:
+        # Not the order's owner — never see anyone else's bid, only your own (a
+        # worker checking whether they've already proposed on this order).
+        query["worker_id"] = current["id"]
+    proposals = await db.proposals.find(query, {"_id": 0}).sort("created_at", -1).to_list(50)
     worker_ids = list({p["worker_id"] for p in proposals})
     workers = {u["id"]: u async for u in db.users.find({"id": {"$in": worker_ids}}, {"_id": 0})}
     return [p | {"worker": public_user(workers.get(p["worker_id"]))} for p in proposals]
@@ -480,6 +516,7 @@ async def order_proposals(order_id: str):
 @router.post("/orders/{order_id}/proposals")
 async def create_proposal(order_id: str, body: ProposalCreate, current=Depends(get_current_user)):
     rate_limit(f"create-proposal:{current['id']}", max_attempts=30, window_seconds=600)
+    require_active_account(current)
     order = await db.orders.find_one({"id": order_id})
     if not order:
         raise HTTPException(404, "Pedido não encontrado")

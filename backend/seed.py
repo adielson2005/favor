@@ -1,9 +1,26 @@
 """Idempotent demo/reference data seeding for fazum."""
+import os
+
 from auth import hash_password
-from database import db, now
+from database import db, new_id, now
 
 SEED_VERSION = 3
 DEMO_PASSWORD = "faze2024"
+
+ADMIN_ROLES = [
+    {"key": "OWNER", "name": "Administrador principal"},
+    {"key": "MANAGER", "name": "Gerente"},
+    {"key": "SUPPORT", "name": "Suporte"},
+    {"key": "MAINTENANCE", "name": "Manutenção"},
+]
+
+FEATURE_FLAGS = [
+    {"key": "GOOGLE_LOGIN", "enabled": True, "description": "Login/cadastro com Google"},
+    {"key": "WALLET", "enabled": True, "description": "Carteira digital"},
+    {"key": "WITHDRAWAL", "enabled": True, "description": "Saques da carteira"},
+    {"key": "URGENT_SERVICES", "enabled": True, "description": "Marcar pedidos como urgentes"},
+    {"key": "RECURRING_SERVICES", "enabled": True, "description": "Pedidos recorrentes"},
+]
 
 NEIGHBORHOODS = {
     "bairro": [
@@ -40,11 +57,11 @@ CATEGORIES = [
 ]
 
 USERS = [
-    {"id": "demo-client", "name": "Marina Alves", "email": "marina@fazum.demo", "initials": "MA", "bio": "Moro em Parauapebas e uso o fazum para o dia a dia.", "rating": 4.9, "rating_count": 11, "jobs_done": 12, "neighborhood": "Cidade Nova", "verified_email": True, "verified_phone": True, "verified_identity": True, "is_admin": False},
-    {"id": "demo-worker", "name": "João Ribeiro", "email": "joao@fazum.demo", "initials": "JR", "bio": "Faço entregas, montagens e pequenos serviços. Rápido e de confiança.", "rating": 4.9, "rating_count": 78, "jobs_done": 86, "neighborhood": "União", "verified_email": True, "verified_phone": True, "verified_identity": True, "is_admin": False},
-    {"id": "worker-ana", "name": "Ana Souza", "email": "ana@fazum.demo", "initials": "AS", "bio": "Compras, pets e organização. Capricho em tudo.", "rating": 4.8, "rating_count": 39, "jobs_done": 42, "neighborhood": "Rio Verde", "verified_email": True, "verified_phone": True, "verified_identity": True, "is_admin": False},
-    {"id": "worker-pedro", "name": "Pedro Lima", "email": "pedro@fazum.demo", "initials": "PL", "bio": "Técnico em informática. Configuro computadores e redes.", "rating": 4.7, "rating_count": 17, "jobs_done": 19, "neighborhood": "Beira Rio", "verified_email": True, "verified_phone": False, "verified_identity": False, "is_admin": False},
-    {"id": "demo-admin", "name": "Equipe fazum", "email": "admin@fazum.demo", "initials": "FZ", "bio": "Administração da plataforma.", "rating": 5.0, "rating_count": 0, "jobs_done": 0, "neighborhood": "Cidade Nova", "verified_email": True, "verified_phone": True, "verified_identity": True, "is_admin": True},
+    {"id": "demo-client", "name": "Marina Alves", "email": "marina@fazum.demo", "phone": "+5594991110001", "initials": "MA", "bio": "Moro em Parauapebas e uso o fazum para o dia a dia.", "rating": 4.9, "rating_count": 11, "jobs_done": 12, "neighborhood": "Cidade Nova", "verified_email": True, "verified_phone": True, "verified_identity": True, "is_admin": False},
+    {"id": "demo-worker", "name": "João Ribeiro", "email": "joao@fazum.demo", "phone": "+5594991110002", "initials": "JR", "bio": "Faço entregas, montagens e pequenos serviços. Rápido e de confiança.", "rating": 4.9, "rating_count": 78, "jobs_done": 86, "neighborhood": "União", "verified_email": True, "verified_phone": True, "verified_identity": True, "is_admin": False},
+    {"id": "worker-ana", "name": "Ana Souza", "email": "ana@fazum.demo", "phone": "+5594991110003", "initials": "AS", "bio": "Compras, pets e organização. Capricho em tudo.", "rating": 4.8, "rating_count": 39, "jobs_done": 42, "neighborhood": "Rio Verde", "verified_email": True, "verified_phone": True, "verified_identity": True, "is_admin": False},
+    {"id": "worker-pedro", "name": "Pedro Lima", "email": "pedro@fazum.demo", "phone": "+5594991110004", "initials": "PL", "bio": "Técnico em informática. Configuro computadores e redes.", "rating": 4.7, "rating_count": 17, "jobs_done": 19, "neighborhood": "Beira Rio", "verified_email": True, "verified_phone": False, "verified_identity": False, "is_admin": False},
+    {"id": "demo-admin", "name": "Equipe fazum", "email": "admin@fazum.demo", "phone": "+5594991110005", "initials": "FZ", "bio": "Administração da plataforma.", "rating": 5.0, "rating_count": 0, "jobs_done": 0, "neighborhood": "Cidade Nova", "verified_email": True, "verified_phone": True, "verified_identity": True, "is_admin": True},
 ]
 
 ORDERS = [
@@ -103,9 +120,13 @@ async def ensure_seed():
         if not existing:
             user = dict(user)
             hood = hood_by_name.get(user.pop("neighborhood"), {})
+            active = user.get("verified_email") and user.get("verified_phone")
             user.update({
                 "password_hash": hash_password(DEMO_PASSWORD), "preference": "both",
                 "city_id": "city-parauapebas", "neighborhood_id": hood.get("id"), "blocked": False,
+                "state_id": "st-pa", "account_status": "ACTIVE" if active else "PENDING_VERIFICATION",
+                "email_verified_at": now() if user.get("verified_email") else None,
+                "phone_verified_at": now() if user.get("verified_phone") else None,
                 "member_since": "2025-08-01T00:00:00+00:00", "is_demo": True, "created_at": now(),
             })
             await db.users.insert_one(dict(user))
@@ -115,6 +136,17 @@ async def ensure_seed():
                 updates["password_hash"] = hash_password(DEMO_PASSWORD)
             if not existing.get("preference"):
                 updates["preference"] = "both"
+            if not existing.get("phone") and user.get("phone"):
+                updates["phone"] = user["phone"]
+            if not existing.get("state_id"):
+                updates["state_id"] = "st-pa"
+            if not existing.get("account_status"):
+                active = existing.get("verified_email") and existing.get("verified_phone")
+                updates["account_status"] = "ACTIVE" if active else "PENDING_VERIFICATION"
+            if existing.get("verified_email") and not existing.get("email_verified_at"):
+                updates["email_verified_at"] = "2025-08-01T00:00:00+00:00"
+            if existing.get("verified_phone") and not existing.get("phone_verified_at"):
+                updates["phone_verified_at"] = "2025-08-01T00:00:00+00:00"
             # These accounts only ever carry demo data (never real user content), so
             # rename-in-place is safe: move a still-on-the-old-domain demo account to
             # its new address/name rather than leaving it permanently stale.
@@ -143,3 +175,34 @@ async def ensure_seed():
     if await db.proposals.count_documents({}) == 0:
         await db.proposals.insert_one({"id": "prop-demo-1", "order_id": "order-2", "worker_id": "worker-ana", "amount": 110, "message": "Já montei mais de 20 guarda-roupas. Levo minhas ferramentas e deixo tudo limpo.", "eta": "Amanhã de manhã", "status": "pending", "is_demo": True, "created_at": now()})
         await db.proposals.insert_one({"id": "prop-demo-2", "order_id": "order-2", "worker_id": "worker-pedro", "amount": 130, "message": "Posso fazer amanhã cedo, tenho experiência com móveis planejados.", "eta": "Amanhã, 8h", "status": "pending", "is_demo": True, "created_at": now()})
+
+    # Admin-panel RBAC roles — display records only; the actual permission sets
+    # live in code (admin_permissions.py) so they can't silently drift from what
+    # the backend actually enforces.
+    # One-time rename: ATENDENTE -> SUPPORT (Fase 2 renamed the role to match the
+    # spec's own wording). Safe as a plain field update since the role document is
+    # just a display record and any admin_users row still pointing at the old key
+    # gets renamed right after.
+    await db.admin_roles.update_one({"key": "ATENDENTE"}, {"$set": {"key": "SUPPORT", "name": "Suporte"}})
+    await db.admin_users.update_many({"role": "ATENDENTE"}, {"$set": {"role": "SUPPORT"}})
+    for role in ADMIN_ROLES:
+        await db.admin_roles.update_one({"key": role["key"]}, {"$setOnInsert": role}, upsert=True)
+
+    # One seed OWNER account so the panel is usable out of the box. Dev-only
+    # convenience — production must set its own ADMIN_SEED_EMAIL/PASSWORD (or just
+    # create further accounts through the panel and deactivate this one).
+    if await db.admin_users.count_documents({}) == 0:
+        seed_email = os.environ.get("ADMIN_SEED_EMAIL", "admin@fazum.demo").lower()
+        seed_password = os.environ.get("ADMIN_SEED_PASSWORD", DEMO_PASSWORD)
+        await db.admin_users.insert_one({
+            "id": new_id(), "name": "Equipe fazum", "email": seed_email,
+            "password_hash": hash_password(seed_password), "role": "OWNER", "active": True,
+            "token_version": 0, "totp_enabled": False, "last_login_at": None,
+            "created_at": now(), "updated_at": now(),
+        })
+
+    # Feature flags — seeded reflecting the REAL current behavior of the app (all
+    # on, since these are already-shipped capabilities), never overwriting a value
+    # an admin has since changed via the panel.
+    for flag in FEATURE_FLAGS:
+        await db.feature_flags.update_one({"key": flag["key"]}, {"$setOnInsert": flag}, upsert=True)

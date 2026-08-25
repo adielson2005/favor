@@ -110,15 +110,36 @@ async def import_payments(pg,run):
               d.get("provider"),d.get("provider_transaction_id"),d.get("idempotency_key"),d.get("client_ip"),ts(d.get("created_at")) or datetime.now(),ts(d.get("updated_at")) or datetime.now())
         except Exception as e: await issue(pg,run,"payments",k,"PAYMENT_INVALID",{"error":str(e)})
 
+async def import_withdrawals(pg,run):
+    allowed=("PENDING","REVIEW_REQUIRED","PROCESSING","COMPLETED","FAILED","REJECTED","CANCELLED")
+    for r in await rows(pg,run,"withdrawals"):
+        d=r["payload"]; k=r["legacy_id"]; ident=await mapid(pg,run,"withdrawals",k,"withdrawals")
+        try:
+            await pg.execute("""INSERT INTO withdrawals(id,legacy_id,user_id,amount_cents,bank_account_id,bank_account_snapshot,status,risk_level,risk_reasons,idempotency_key,created_at,updated_at)
+              VALUES($1,$2,$3,$4,$5,$6::jsonb,$7::withdrawal_status,$8,$9::jsonb,$10,$11,$12)
+              ON CONFLICT(legacy_id) DO UPDATE SET status=EXCLUDED.status,updated_at=EXCLUDED.updated_at""",
+              ident,k,uid("users",d["user_id"]),cents(d["amount"]),uid("bank_accounts",d["bank_account_id"]) if d.get("bank_account_id") else None,
+              json.dumps(d.get("bank_account_snapshot",{})),status(d.get("status"),allowed,"PENDING"),d.get("risk_level"),
+              json.dumps(d.get("risk_reasons",[])),d.get("idempotency_key"),ts(d.get("created_at")) or datetime.now(),ts(d.get("updated_at")) or datetime.now())
+        except Exception as e: await issue(pg,run,"withdrawals",k,"WITHDRAWAL_INVALID",{"error":str(e)})
+
+async def import_payment_events(pg,run):
+    for r in await rows(pg,run,"payment_events"):
+        d=r["payload"]; k=r["legacy_id"]; ident=await mapid(pg,run,"payment_events",k,"payment_events")
+        try:
+            await pg.execute("""INSERT INTO payment_events(id,legacy_id,provider,event_id,payload,signature_valid,received_at,processed_at)
+              VALUES($1,$2,$3,$4,$5::jsonb,$6,$7,$8) ON CONFLICT(legacy_id) DO UPDATE SET processed_at=EXCLUDED.processed_at""",
+              ident,k,d.get("provider","asaas"),d["event_id"],json.dumps(d.get("payload",{})),True,ts(d.get("received_at")) or ts(d.get("processed_at")) or datetime.now(),ts(d.get("processed_at")))
+        except Exception as e: await issue(pg,run,"payment_events",k,"PAYMENT_EVENT_INVALID",{"error":str(e)})
+
 async def reconcile(pg,run):
     # Exact source->target row/count and cached-cent comparisons. Ledger semantic balancing
     # is intentionally a separate signed-entry audit because MOVE records are not debit/credit pairs.
     failures=[]
     for c in FINANCIAL:
         source=await pg.fetchval("SELECT count(*) FROM migration_staging WHERE migration_run_id=$1 AND collection_name=$2",run,c)
-        table=c
-        target=await pg.fetchval(f"SELECT count(*) FROM {table}") if c!="payment_events" else 0
-        if c!="payment_events" and source!=target: failures.append({"collection":c,"source":source,"target":target})
+        target=await pg.fetchval(f"SELECT count(*) FROM {c}")
+        if source!=target: failures.append({"collection":c,"source":source,"target":target})
     if failures: await issue(pg,run,"financial",None,"ROW_COUNT_MISMATCH",{"failures":failures})
     await pg.execute("UPDATE migration_runs SET details=details || $2::jsonb WHERE id=$1",run,json.dumps({"financial_reconciliation":{"row_count_failures":failures}}))
     return failures
@@ -130,7 +151,7 @@ async def main(a):
         run=await pg.fetchrow("SELECT id,status FROM migration_runs WHERE id=$1::uuid",a.run_id)
         if not run or run["status"]!="VALIDATED": raise RuntimeError("run must be VALIDATED")
         await import_wallets(pg,run["id"]); await import_transactions(pg,run["id"]); await import_bank_accounts(pg,run["id"],fernet)
-        await import_deposits(pg,run["id"]); await import_payments(pg,run["id"]); failures=await reconcile(pg,run["id"])
+        await import_deposits(pg,run["id"]); await import_payments(pg,run["id"]); await import_withdrawals(pg,run["id"]); await import_payment_events(pg,run["id"]); failures=await reconcile(pg,run["id"])
         print(json.dumps({"run_id":a.run_id,"financial_row_count_failures":failures,"cutover_allowed":False}))
     finally: await pg.close()
 if __name__=="__main__":

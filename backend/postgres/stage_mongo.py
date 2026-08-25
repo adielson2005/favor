@@ -60,6 +60,14 @@ def canonical_document(document: dict[str, Any]) -> tuple[str, str, str, datetim
     return legacy_id, hashlib.sha256(encoded.encode("utf-8")).hexdigest(), encoded, created_at
 
 
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while block := stream.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 def create_backup(mongo_uri: str, backup_dir: Path) -> Path:
     """Create an encrypted-at-rest destination on your backup volume before calling this."""
     backup_dir.mkdir(parents=True, exist_ok=True)
@@ -137,9 +145,10 @@ async def validate(pg, run_id, source_counts: dict[str, int]) -> dict[str, dict[
 async def main(args) -> None:
     mongo_uri, postgres_dsn = require_env("MONGO_URL"), require_env("POSTGRES_DSN")
     backup = create_backup(mongo_uri, Path(args.backup_dir))
-    backup_sha256 = hashlib.sha256(backup.read_bytes()).hexdigest()
+    backup_sha256 = sha256_file(backup)
     mongo_client = AsyncIOMotorClient(mongo_uri)
     pg = await asyncpg.connect(postgres_dsn)
+    run = None
     try:
         mongo_db = mongo_client[require_env("DB_NAME")]
         await mongo_db.command("ping")
@@ -155,8 +164,9 @@ async def main(args) -> None:
         print(json.dumps({"run_id": str(run["id"]), "status": "VALIDATED", "backup": str(backup)}, ensure_ascii=False))
     except Exception as error:
         # Preserve the staged evidence for inspection; status makes the failure explicit.
-        await pg.execute("UPDATE migration_runs SET status='FAILED',finished_at=now(),details=details || $2::jsonb WHERE source=$1",
-                         SOURCE_NAME, json.dumps({"error": str(error)}))
+        if run is not None:
+            await pg.execute("UPDATE migration_runs SET status='FAILED',finished_at=now(),details=details || $2::jsonb WHERE id=$1",
+                             run["id"], json.dumps({"error": str(error)}))
         raise
     finally:
         await pg.close()

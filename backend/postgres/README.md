@@ -40,6 +40,10 @@ The command invokes `mongodump` through a temporary config file, hashes the resu
 
 No production migration should run automatically in CI or on application startup.
 
+## Implemented read-only reconciliation gate
+
+`python reconcile.py --run-id <validated-run-uuid>` validates source/staging counts, canonical ID-map coverage, money totals in centavos, duplicate idempotency keys, payment arithmetic, negative cached balances, and open blocking migration issues. It saves the report against the migration run and exits non-zero on a blocking mismatch. It cannot enable cutover or alter MongoDB.
+
 ## Implemented financial import (offline, reconciled)
 
 `import_financial.py --run-id <validated-run-uuid>` imports wallets, ledger records, deposits, bank accounts, withdrawals, payments and provider events. It requires `BANK_DATA_ENCRYPTION_KEY` (a Fernet key supplied only at execution time) and encrypts document, agency and account-number fields before they reach PostgreSQL. Values formerly stored as floats are converted through Decimal to integer centavos.

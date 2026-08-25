@@ -130,11 +130,12 @@ async def main(args):
     try:
         run=await pg.fetchrow("SELECT id,status FROM migration_runs WHERE id=$1::uuid",args.run_id)
         if not run or run["status"]!="VALIDATED": raise RuntimeError("run must exist and be VALIDATED")
-        async with pg.transaction():
-            await import_geography(pg,run["id"]); await import_taxonomy(pg,run["id"]); await import_users(pg,run["id"]); await import_orders(pg,run["id"])
-            for collection in SENSITIVE_COLLECTIONS:
-                count=await pg.fetchval("SELECT count(*) FROM migration_staging WHERE migration_run_id=$1 AND collection_name=$2",run["id"],collection)
-                if count: await issue(pg,run["id"],collection,None,"SENSITIVE_DOMAIN_PENDING",{"documents":count},"WARNING")
+        # Do not wrap the full import in one transaction: invalid legacy records are
+        # quarantined individually and must not poison an otherwise valid batch.
+        await import_geography(pg,run["id"]); await import_taxonomy(pg,run["id"]); await import_users(pg,run["id"]); await import_orders(pg,run["id"])
+        for collection in SENSITIVE_COLLECTIONS:
+            count=await pg.fetchval("SELECT count(*) FROM migration_staging WHERE migration_run_id=$1 AND collection_name=$2",run["id"],collection)
+            if count: await issue(pg,run["id"],collection,None,"SENSITIVE_DOMAIN_PENDING",{"documents":count},"WARNING")
         blocking=await pg.fetchval("SELECT count(*) FROM migration_issues WHERE migration_run_id=$1 AND severity='BLOCKING' AND resolved_at IS NULL",run["id"])
         print(json.dumps({"run_id":args.run_id,"blocking_issues":blocking,"cutover_allowed":False}))
     finally: await pg.close()

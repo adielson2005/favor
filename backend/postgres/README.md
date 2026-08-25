@@ -40,6 +40,12 @@ The command invokes `mongodump` through a temporary config file, hashes the resu
 
 No production migration should run automatically in CI or on application startup.
 
+## Implemented financial import (offline, reconciled)
+
+`import_financial.py --run-id <validated-run-uuid>` imports wallets, ledger records, deposits, bank accounts, withdrawals, payments and provider events. It requires `BANK_DATA_ENCRYPTION_KEY` (a Fernet key supplied only at execution time) and encrypts document, agency and account-number fields before they reach PostgreSQL. Values formerly stored as floats are converted through Decimal to integer centavos.
+
+The financial importer checks staging-to-target row counts and registers failures in `migration_issues`. It preserves the special Mongo `platform` wallet through a dedicated internal platform user. It does not by itself prove ledger semantic balance, resolve every canonical non-financial table, or authorize cutover.
+
 ## Implemented canonical import (partial by design)
 
 `import_canonical.py --run-id <validated-run-uuid>` imports the non-sensitive relational foundation: geography, categories, subcategories, users and orders. It is idempotent through `legacy_id_map` and writes malformed relations and base64 media as `migration_issues` instead of skipping them.

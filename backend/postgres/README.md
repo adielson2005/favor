@@ -30,6 +30,14 @@ The Mongo indexes declared by `server.py` are mirrored by keys/unique indexes in
 7. Perform a delta import from the recorded high-water mark, validate again, then switch the backend using a feature flag. Keep Mongo read-only for the rollback window.
 8. Rollback means: switch the feature flag to Mongo, preserve PostgreSQL for forensics, and replay no financial webhook twice. Do **not** restore over either live database.
 
+## Implemented offline staging command
+
+After applying `0001_fazum_baseline.sql` and `0002_migration_staging.sql` to an empty PostgreSQL database, install `requirements-migration.txt` in an isolated migration environment. Set `MONGO_URL`, `DB_NAME`, and `POSTGRES_DSN` only in that environment, then run:
+
+`python stage_mongo.py --backup-dir <encrypted-backup-volume>`
+
+The command invokes `mongodump` through a temporary config file, hashes the resulting archive incrementally, stages every document as lossless JSONB, and validates all 32 collection counts. It records an immutable run row and refuses to change completed or rolled-back runs. A `VALIDATED` staging run is **not** a permission to route application traffic to PostgreSQL; canonical table mapping, FK/orphan checks, balance reconciliation, delta capture and feature-flag cutover still remain mandatory.
+
 No production migration should run automatically in CI or on application startup.
 
 ## pgAdmin / DBeaver access

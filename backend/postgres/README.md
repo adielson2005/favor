@@ -4,7 +4,7 @@ This directory is additive. MongoDB remains the production source of truth until
 
 ## Audit: collections actually used
 
-Runtime collections (31): `users`, `auth_accounts`, `verification_tokens`, `security_events`, `states`, `cities`, `neighborhoods`, `categories`, `subcategories`, `orders`, `proposals`, `messages`, `reviews`, `reports`, `blocks`, `favorites`, `notifications`, `wallets`, `wallet_transactions`, `deposits`, `bank_accounts`, `withdrawals`, `payments`, `payment_events`, `disputes`, `risk_flags`, `platform_config`, `admin_users`, `admin_roles`, `admin_actions`, `feature_flags`, and `tickets`. `meta` is used only by the seed process.
+Runtime collections (32): `users`, `auth_accounts`, `verification_tokens`, `security_events`, `states`, `cities`, `neighborhoods`, `categories`, `subcategories`, `orders`, `proposals`, `messages`, `reviews`, `reports`, `blocks`, `favorites`, `notifications`, `wallets`, `wallet_transactions`, `deposits`, `bank_accounts`, `withdrawals`, `payments`, `payment_events`, `disputes`, `risk_flags`, `platform_config`, `admin_users`, `admin_roles`, `admin_actions`, `feature_flags`, and `tickets`. `meta` is used only by the seed process.
 
 The Mongo indexes declared by `server.py` are mirrored by keys/unique indexes in the baseline; the migration must add indexes that match the live query plans before cutover. Notable query paths are marketplace browse `orders(city_id,status,created_at)`, message timeline, notification inbox, wallet history, ticket queue, risk queue, user email/phone lookup, one proposal per worker/order, and idempotency keys.
 

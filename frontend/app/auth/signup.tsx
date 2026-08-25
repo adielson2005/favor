@@ -294,7 +294,16 @@ export default function Signup() {
                     <Text style={{ color: colors[strength.color], fontFamily: fonts.bodySemiBold, fontSize: 12 }}>{strength.label}</Text>
                   </View>
                 )}
-                <Field testID="signup-confirm-input" label="Confirmar senha" value={confirmPassword} onChangeText={setConfirmPassword} placeholder="Repita a senha" secureTextEntry autoComplete="new-password" />
+                <Field
+                  testID="signup-confirm-input"
+                  label="Confirmar senha"
+                  value={confirmPassword}
+                  onChangeText={setConfirmPassword}
+                  placeholder="Repita a senha"
+                  secureTextEntry
+                  autoComplete="new-password"
+                  error={confirmPassword.length > 0 && confirmPassword !== password ? "As senhas não coincidem." : undefined}
+                />
                 <View style={{ gap: 4, marginTop: space.xs }}>
                   <Requirement met={password.length >= 8} label="8 caracteres ou mais" />
                   <Requirement met={/[a-z]/i.test(password)} label="uma letra" />

@@ -13,7 +13,7 @@ import { fonts } from "@/src/hooks/use-app-fonts";
 import { useFeatureFlag } from "@/src/hooks/use-feature-flags";
 import { useRequireAuth } from "@/src/hooks/use-require-auth";
 import { useApp } from "@/src/state";
-import { type, useTheme } from "@/src/theme";
+import { type as textStyles, useTheme } from "@/src/theme";
 import { safeBack } from "@/src/utils/navigation";
 
 const MAX_PHOTOS = 4;
@@ -167,8 +167,8 @@ export default function Create() {
     return <View style={{ flex: 1, backgroundColor: colors.bg, alignItems: "center", justifyContent: "center" }} />;
   }
 
-  const label = { color: colors.ink, ...type.h1, marginBottom: 6 };
-  const hint = { color: colors.muted, ...type.body, marginBottom: 18 };
+  const label = { color: colors.ink, ...textStyles.h1, marginBottom: 6 };
+  const hint = { color: colors.muted, ...textStyles.body, marginBottom: 18 };
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg, paddingTop: Platform.OS === "ios" ? 12 : insets.top + 8 }}>

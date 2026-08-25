@@ -84,6 +84,7 @@ export type Wallet = { available: number; pending: number; processing: number; t
 export type WalletTransaction = {
   id: string; type: string; amount: number; direction: "IN" | "OUT" | "MOVE"; status: string; bucket: string;
   reference_type: string; reference_id: string; description: string; created_at: string;
+  provider?: string; provider_transaction_id?: string;
 };
 export type Deposit = { id: string; amount: number; method: string; status: string; created_at: string };
 export type BankAccount = {

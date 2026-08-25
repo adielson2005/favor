@@ -1,0 +1,4 @@
+# Used only by the explicit offline migration worker; do not add to the API runtime until cutover.
+asyncpg==0.30.0
+motor==3.7.0
+pymongo==4.12.1

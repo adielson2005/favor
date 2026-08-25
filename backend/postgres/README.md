@@ -40,6 +40,12 @@ The command invokes `mongodump` through a temporary config file, hashes the resu
 
 No production migration should run automatically in CI or on application startup.
 
+## Implemented canonical import (partial by design)
+
+`import_canonical.py --run-id <validated-run-uuid>` imports the non-sensitive relational foundation: geography, categories, subcategories, users and orders. It is idempotent through `legacy_id_map` and writes malformed relations and base64 media as `migration_issues` instead of skipping them.
+
+The importer explicitly does **not** import wallet/ledger, deposits, bank accounts, withdrawals, payments or payment events into canonical financial tables. These records must be migrated only with a financially reconciled, transactionally balanced importer and envelope encryption for bank-account fields. This safety boundary means that `cutover_allowed` remains false after the current importer.
+
 ## pgAdmin / DBeaver access
 
 Do not expose PostgreSQL publicly. Production PostgreSQL must listen on a private network only. Use an SSH tunnel or a zero-trust/VPN bastion with named individual database users, TLS verification, IP allow-listing, least privilege, and MFA on the bastion. The application has a separate non-superuser role; its database credentials cannot create users, extensions, or databases. DBeaver/pgAdmin users should be read-only by default. Administrative write access is temporary and audited.

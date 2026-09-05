@@ -11,10 +11,12 @@ from datetime import datetime, timezone
 from typing import Optional
 
 import jwt
+import pyotp
 from fastapi import Depends, Header, HTTPException
 
 from admin_permissions import has_permission, permissions_for_role
 from auth import JWT_ALG, JWT_SECRET, hash_password, verify_password  # noqa: F401 (re-exported for callers)
+from bank_encryption import decrypt_field
 from database import db, now
 
 ADMIN_TOKEN_TTL_SECONDS = 12 * 3600  # 12h — a staff tool, re-login is cheap and safer than a 30-day session
@@ -84,6 +86,20 @@ def require_permission(*keys: str):
             raise HTTPException(403, "Você não tem permissão para essa ação.")
         return admin
     return _checker
+
+
+def require_step_up_totp(admin: dict, code: Optional[str], amount: float, threshold: float) -> None:
+    """Gate for financial admin actions above a configurable value (routes/admin.py's
+    admin_adjust_wallet/admin_approve_withdrawal) — a stolen/replayed session token
+    is enough to authenticate, but not enough to move a large amount on its own.
+    Below the threshold, this is a no-op — same single-factor auth as always.
+    """
+    if amount < threshold:
+        return
+    if not admin.get("totp_enabled"):
+        raise HTTPException(403, f"Ative a autenticação de dois fatores em Configurações para ações acima de R$ {threshold:.2f}.")
+    if not code or not pyotp.TOTP(decrypt_field(admin["totp_secret"])).verify(code.strip(), valid_window=1):
+        raise HTTPException(401, "Informe o código de autenticação de dois fatores para confirmar esta ação.")
 
 
 def require_any_permission(*keys: str):

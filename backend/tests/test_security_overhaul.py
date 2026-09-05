@@ -10,8 +10,6 @@ Follows the exact fixture/helper pattern already established in test_financial.p
 throwaway `_register()` accounts per session, never the shared demo accounts.
 """
 import concurrent.futures
-import hashlib
-import hmac
 import json
 import os
 import uuid
@@ -20,8 +18,7 @@ import pytest
 import requests
 from dotenv import dotenv_values
 
-BASE_URL = (dotenv_values('/app/frontend/.env').get('EXPO_PUBLIC_BACKEND_URL')
-            or os.environ.get('EXPO_PUBLIC_BACKEND_URL')).rstrip('/')
+BASE_URL = os.environ.get('BACKEND_URL', 'http://localhost:8000').rstrip('/')
 API = f"{BASE_URL}/api"
 
 # The server process loads backend/.env itself (database.py), but this pytest
@@ -112,6 +109,18 @@ def credit(api, admin_token, user_id, amount, reason=None):
                  json={"user_id": user_id, "amount": amount, "reason": reason or TAG}, timeout=15)
     assert r.status_code == 200, r.text
     return r.json()
+
+
+def credit_large(api, admin_token, user_id, amount, reason=None):
+    # admin_token (demo OWNER) has no 2FA enabled, so a single credit at/above
+    # admin_reauth_threshold (routes/admin.py's step-up check) would now be
+    # blocked — chunk into sub-threshold pieces purely for test setup purposes.
+    CHUNK = 900
+    remaining = amount
+    while remaining > 0:
+        piece = min(CHUNK, remaining)
+        credit(api, admin_token, user_id, piece, reason=reason)
+        remaining -= piece
 
 
 def get_wallet(api, token):
@@ -344,10 +353,11 @@ def test_concurrent_payment_only_one_succeeds(api, client_token, worker_token, a
 def test_duplicate_webhook_does_not_double_process():
     if not WEBHOOK_SECRET:
         pytest.skip("ASAAS_WEBHOOK_SECRET not configured in this environment")
+    # ASAAS doesn't sign the body — it echoes back a static access token on every
+    # call, compared directly. See backend/routes/wallet.py's payment_webhook.
     payload = {"id": f"{TAG}-evt-1", "event": "PAYMENT_RECEIVED", "payment": {"id": "fake"}}
     body = json.dumps(payload).encode()
-    sig = hmac.new(WEBHOOK_SECRET.encode(), body, hashlib.sha256).hexdigest()
-    headers = {"Content-Type": "application/json", "asaas-signature": sig}
+    headers = {"Content-Type": "application/json", "asaas-access-token": WEBHOOK_SECRET}
     r1 = requests.post(f"{API}/webhooks/payment-provider", data=body, headers=headers, timeout=15)
     assert r1.status_code == 200, r1.text
     assert r1.json().get("duplicate") is not True
@@ -361,7 +371,7 @@ def test_webhook_rejects_bad_signature():
         pytest.skip("ASAAS_WEBHOOK_SECRET not configured in this environment")
     payload = {"id": f"{TAG}-evt-bad-sig", "event": "PAYMENT_RECEIVED"}
     body = json.dumps(payload).encode()
-    headers = {"Content-Type": "application/json", "asaas-signature": "not-the-real-signature"}
+    headers = {"Content-Type": "application/json", "asaas-access-token": "not-the-real-token"}
     r = requests.post(f"{API}/webhooks/payment-provider", data=body, headers=headers, timeout=15)
     assert r.status_code == 401
 
@@ -491,7 +501,7 @@ def test_clean_message_gets_no_warning(api, client_token, worker_token):
 def test_large_payment_requires_password_reauth(api, worker_token, admin_token):
     risk_client_token, risk_client_id = _register(api, "risk_medium")
     budget = 1500  # >= R$1000 -> at least a "large_amount" signal
-    credit(api, admin_token, risk_client_id, budget + 100)
+    credit_large(api, admin_token, risk_client_id, budget + 100)
     order_id = make_order(api, risk_client_token, budget, "risk-medium")
     propose_and_accept(api, risk_client_token, worker_token, order_id, budget)
 
@@ -504,7 +514,7 @@ def test_large_payment_requires_password_reauth(api, worker_token, admin_token):
 def test_critical_risk_payment_is_blocked_and_flagged(api, worker_token, admin_token):
     risk_client_token, risk_client_id = _register(api, "risk_critical")
     budget = 6000  # >= R$5000 -> "very_large_amount", combined with fresh account + a chat flag
-    credit(api, admin_token, risk_client_id, budget + 100)
+    credit_large(api, admin_token, risk_client_id, budget + 100)
     order_id = make_order(api, risk_client_token, budget, "risk-critical")
     propose_and_accept(api, risk_client_token, worker_token, order_id, budget)
     api.post(f"{API}/orders/{order_id}/messages", headers=auth(risk_client_token), json={"text": "pague por fora"}, timeout=15)

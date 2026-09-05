@@ -19,8 +19,7 @@ import pytest
 import requests
 from dotenv import dotenv_values
 
-BASE_URL = (dotenv_values('/app/frontend/.env').get('EXPO_PUBLIC_BACKEND_URL')
-            or os.environ.get('EXPO_PUBLIC_BACKEND_URL')).rstrip('/')
+BASE_URL = os.environ.get('BACKEND_URL', 'http://localhost:8000').rstrip('/')
 API = f"{BASE_URL}/api"
 
 _backend_env = dotenv_values(os.path.join(os.path.dirname(__file__), "..", ".env"))

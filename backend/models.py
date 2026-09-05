@@ -196,6 +196,9 @@ class ActivePatch(BaseModel):
 class DepositIn(BaseModel):
     amount: float = Field(gt=0)
     method: str = "pix"  # pix | card (card reserved for future use)
+    # Only required the first time this user deposits via a real gateway (ASAAS
+    # needs a CPF/CNPJ to create a customer) — omitted on every deposit after that.
+    document: Optional[str] = None
 
 
 class BankAccountIn(BaseModel):
@@ -235,6 +238,12 @@ class AdminWithdrawalActionIn(BaseModel):
     reason: str = ""
 
 
+class AdminWithdrawalApproveIn(BaseModel):
+    # Only checked/required when the withdrawal amount is >= the configured
+    # admin_reauth_threshold — see admin_auth.py's require_step_up_totp.
+    totp_code: Optional[str] = None
+
+
 class AdminDisputeActionIn(BaseModel):
     status: str  # UNDER_REVIEW | WAITING_CUSTOMER | WAITING_PROVIDER | RESOLVED | REJECTED | CANCELLED
     resolution: str = ""
@@ -259,6 +268,8 @@ class AdminAdjustmentIn(BaseModel):
     user_id: str
     amount: float  # positive = credit, negative = debit
     reason: str = Field(min_length=3)
+    # Only checked/required when abs(amount) >= admin_reauth_threshold.
+    totp_code: Optional[str] = None
 
 
 class CommissionConfigIn(BaseModel):
@@ -266,6 +277,7 @@ class CommissionConfigIn(BaseModel):
     min_withdrawal: Optional[float] = Field(default=None, ge=0)
     max_withdrawal_per_day: Optional[float] = Field(default=None, ge=0)
     max_deposit_per_transaction: Optional[float] = Field(default=None, ge=0)
+    admin_reauth_threshold: Optional[float] = Field(default=None, ge=0)
 
 
 # ---------- admin panel (RBAC) ----------

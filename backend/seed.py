@@ -3,6 +3,7 @@ import os
 
 from auth import hash_password
 from database import db, new_id, now
+from scripts.backfill_neighborhood_zones import ZONE_MAP
 
 SEED_VERSION = 3
 DEMO_PASSWORD = "faze2024"
@@ -103,7 +104,7 @@ async def ensure_seed():
         for kind, names in NEIGHBORHOODS.items():
             for name in names:
                 i += 1
-                hoods.append({"id": f"nb-{i}", "city_id": "city-parauapebas", "name": name, "kind": kind, "active": True})
+                hoods.append({"id": f"nb-{i}", "city_id": "city-parauapebas", "name": name, "kind": kind, "active": True, "zone": ZONE_MAP.get(name)})
         await db.neighborhoods.insert_many(hoods)
 
         for order_idx, (cid, name, icon, subs) in enumerate(CATEGORIES):

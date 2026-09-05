@@ -187,6 +187,10 @@ async def mark_transaction(txn_id: str, status: str):
 DEFAULT_FINANCIAL_CONFIG = {
     "id": "financial", "commission_percent": 12.0, "min_withdrawal": 20.0,
     "max_withdrawal_per_day": 5000.0, "max_deposit_per_transaction": 10000.0,
+    # Step-up 2FA threshold for admin_adjust_wallet/admin_approve_withdrawal
+    # (routes/admin.py) — below this, single-admin-session auth is enough, same
+    # as always; at/above it, a stolen session token alone can't move the money.
+    "admin_reauth_threshold": 1000.0,
 }
 
 

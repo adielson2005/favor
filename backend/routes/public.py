@@ -1,9 +1,12 @@
 import re
+from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
 from pymongo import ReturnDocument
 
+import geo_catalog_repo as geo_repo
 from auth import get_current_user, get_optional_user, rate_limit, verify_password
 from chat_safety import scan_message_for_external_payment
 from database import db, new_id, now
@@ -80,6 +83,8 @@ def private_user(user: Optional[dict]) -> Optional[dict]:
 
 
 async def ref_maps():
+    if geo_repo.GEO_CATALOG_BACKEND == "postgres":
+        return await run_in_threadpool(geo_repo.load_ref_maps)
     cats = {c["id"]: c async for c in db.categories.find({}, {"_id": 0})}
     subs = {s["id"]: s async for s in db.subcategories.find({}, {"_id": 0})}
     hoods = {h["id"]: h async for h in db.neighborhoods.find({}, {"_id": 0})}
@@ -137,13 +142,19 @@ async def assert_not_blocked(user_a: str, user_b: str):
 @router.get("/bootstrap")
 async def bootstrap():
     users = await db.users.find({"is_demo": True}, {"_id": 0}).to_list(20)
-    states = await db.states.find({"active": True}, {"_id": 0}).to_list(50)
-    cities = await db.cities.find({"active": True}, {"_id": 0}).to_list(200)
-    hoods = await db.neighborhoods.find({"active": True}, {"_id": 0}).sort("name", 1).to_list(500)
-    categories = await db.categories.find({"active": True}, {"_id": 0}).sort("order", 1).to_list(50)
-    subs = await db.subcategories.find({"active": True}, {"_id": 0}).to_list(500)
-    for c in categories:
-        c["subcategories"] = [s for s in subs if s["category_id"] == c["id"]]
+    if geo_repo.GEO_CATALOG_BACKEND == "postgres":
+        states = await run_in_threadpool(geo_repo.list_states)
+        cities = await run_in_threadpool(geo_repo.list_cities)
+        hoods = await run_in_threadpool(geo_repo.list_neighborhoods)
+        categories = await run_in_threadpool(geo_repo.list_categories_with_subs)
+    else:
+        states = await db.states.find({"active": True}, {"_id": 0}).to_list(50)
+        cities = await db.cities.find({"active": True}, {"_id": 0}).to_list(200)
+        hoods = await db.neighborhoods.find({"active": True}, {"_id": 0}).sort("name", 1).to_list(500)
+        categories = await db.categories.find({"active": True}, {"_id": 0}).sort("order", 1).to_list(50)
+        subs = await db.subcategories.find({"active": True}, {"_id": 0}).to_list(500)
+        for c in categories:
+            c["subcategories"] = [s for s in subs if s["category_id"] == c["id"]]
     flags = await get_flags()
     return {"users": [public_user(u) for u in users], "states": states, "cities": cities, "neighborhoods": hoods, "categories": categories, "feature_flags": flags}
 
@@ -155,11 +166,15 @@ async def feature_flags():
 
 @router.get("/geo/states")
 async def geo_states():
+    if geo_repo.GEO_CATALOG_BACKEND == "postgres":
+        return await run_in_threadpool(geo_repo.list_states)
     return await db.states.find({"active": True}, {"_id": 0}).to_list(50)
 
 
 @router.get("/geo/cities")
 async def geo_cities(state_id: Optional[str] = None):
+    if geo_repo.GEO_CATALOG_BACKEND == "postgres":
+        return await run_in_threadpool(geo_repo.list_cities, state_id)
     query: dict = {"active": True}
     if state_id:
         query["state_id"] = state_id
@@ -168,6 +183,8 @@ async def geo_cities(state_id: Optional[str] = None):
 
 @router.get("/geo/neighborhoods")
 async def geo_neighborhoods(city_id: Optional[str] = None):
+    if geo_repo.GEO_CATALOG_BACKEND == "postgres":
+        return await run_in_threadpool(geo_repo.list_neighborhoods, city_id)
     query: dict = {"active": True}
     if city_id:
         query["city_id"] = city_id
@@ -176,6 +193,8 @@ async def geo_neighborhoods(city_id: Optional[str] = None):
 
 @router.get("/categories")
 async def categories():
+    if geo_repo.GEO_CATALOG_BACKEND == "postgres":
+        return await run_in_threadpool(geo_repo.list_categories_with_subs)
     cats = await db.categories.find({"active": True}, {"_id": 0}).sort("order", 1).to_list(50)
     subs = await db.subcategories.find({"active": True}, {"_id": 0}).to_list(500)
     for c in cats:
@@ -206,10 +225,75 @@ async def update_user(user_id: str, body: ProfileUpdate, current=Depends(get_cur
 
 @router.get("/users/{user_id}/stats")
 async def user_stats(user_id: str):
+    """Reputation beyond stars — every field here is derived straight from orders/
+    proposals that already exist, nothing inferred or fabricated. Notably absent:
+    punctuality — there is no timestamp anywhere recording a scheduled-vs-actual
+    arrival time (started_at only records when the worker pressed "iniciar", not
+    whether that matched the order's date_label/time_label), so it can't be computed
+    honestly and isn't included.
+    """
     completed = await db.orders.count_documents({"worker_id": user_id, "status": "completed"})
     cancelled = await db.orders.count_documents({"worker_id": user_id, "status": "cancelled"})
     total = completed + cancelled
-    return {"completion_rate": round(completed / total, 2) if total else None}
+    completion_rate = round(completed / total, 2) if total else None
+    cancellation_rate_as_worker = round(cancelled / total, 2) if total else None
+
+    client_completed = await db.orders.count_documents({"client_id": user_id, "status": "completed"})
+    client_cancelled = await db.orders.count_documents({"client_id": user_id, "status": "cancelled"})
+    client_total = client_completed + client_cancelled
+    cancellation_rate_as_client = round(client_cancelled / client_total, 2) if client_total else None
+
+    # A client hiring the same worker more than once is a real trust signal on its
+    # own, independent of whether that second job finished or was cancelled — so
+    # this counts every order ever assigned, not just terminal ones.
+    client_counts: dict[str, int] = {}
+    async for row in db.orders.aggregate([
+        {"$match": {"worker_id": user_id}},
+        {"$group": {"_id": "$client_id", "n": {"$sum": 1}}},
+    ]):
+        client_counts[row["_id"]] = row["n"]
+    repeat_client_rate = (
+        round(sum(1 for n in client_counts.values() if n > 1) / len(client_counts), 2)
+        if client_counts else None
+    )
+
+    # avg_response_hours: the only real timing signal in the schema — hours between
+    # an order going up and this worker's proposal on it.
+    proposals = await db.proposals.find(
+        {"worker_id": user_id}, {"_id": 0, "order_id": 1, "created_at": 1}
+    ).to_list(500)
+    avg_response_hours = None
+    if proposals:
+        order_ids = list({p["order_id"] for p in proposals})
+        created_by_order = {
+            o["id"]: o["created_at"]
+            async for o in db.orders.find({"id": {"$in": order_ids}}, {"_id": 0, "id": 1, "created_at": 1})
+        }
+        deltas = []
+        for p in proposals:
+            order_created = created_by_order.get(p["order_id"])
+            if not order_created:
+                continue
+            try:
+                hours = (datetime.fromisoformat(p["created_at"]) - datetime.fromisoformat(order_created)).total_seconds() / 3600
+            except ValueError:
+                continue
+            if hours >= 0:  # guard against bad/legacy data producing a negative response time
+                deltas.append(hours)
+        if deltas:
+            avg_response_hours = round(sum(deltas) / len(deltas), 1)
+
+    return {
+        "completion_rate": completion_rate,
+        "completed_count": completed,
+        "cancelled_count": cancelled,
+        "cancellation_rate_as_worker": cancellation_rate_as_worker,
+        "client_completed_count": client_completed,
+        "client_cancelled_count": client_cancelled,
+        "cancellation_rate_as_client": cancellation_rate_as_client,
+        "repeat_client_rate": repeat_client_rate,
+        "avg_response_hours": avg_response_hours,
+    }
 
 
 @router.get("/users/{user_id}/reviews")
@@ -267,10 +351,41 @@ async def list_orders(city_id: Optional[str] = None, category_id: Optional[str] 
             {"subcategory_id": {"$in": sub_ids}},
             {"category_id": {"$in": cat_ids}},
         ]
-    # Kept as a plain array (not {items, total}) so every existing caller keeps working —
-    # the frontend infers "more pages" by checking whether a full page came back.
-    cursor = db.orders.find(query, {"_id": 0}).sort("created_at", -1).skip(max(offset, 0))
-    orders = await cursor.to_list(min(limit, 100))
+    # "Perto de você" soft ranking: only kicks in for the default/unfiltered browse
+    # (no explicit neighborhood_id from the caller) when we know where the caller
+    # is. Everything else — anonymous, no neighborhood on the profile, or an
+    # explicit bairro filter — falls straight through to the plain sort below,
+    # completely unchanged from before this feature existed.
+    caller_neighborhood_id = current.get("neighborhood_id") if current else None
+    use_zone_ranking = bool(caller_neighborhood_id) and not neighborhood_id
+
+    if use_zone_ranking:
+        caller_hood = await db.neighborhoods.find_one({"id": caller_neighborhood_id}, {"_id": 0, "zone": 1, "city_id": 1})
+        caller_zone = caller_hood.get("zone") if caller_hood else None
+        caller_city_id = caller_hood.get("city_id") if caller_hood else None
+        zone_neighborhood_ids: list[str] = []
+        if caller_zone:
+            zone_neighborhood_ids = [
+                n["id"] async for n in db.neighborhoods.find({"zone": caller_zone, "city_id": caller_city_id}, {"_id": 0, "id": 1})
+            ]
+        pipeline = [
+            {"$match": query},
+            {"$addFields": {"_tier": {"$switch": {"branches": [
+                {"case": {"$eq": ["$neighborhood_id", caller_neighborhood_id]}, "then": 0},
+                {"case": {"$in": ["$neighborhood_id", zone_neighborhood_ids]}, "then": 1},
+                {"case": {"$eq": ["$city_id", caller_city_id]}, "then": 2},
+            ], "default": 3}}}},
+            {"$sort": {"_tier": 1, "created_at": -1}},
+            {"$skip": max(offset, 0)},
+            {"$limit": min(limit, 100)},
+            {"$project": {"_id": 0, "_tier": 0}},
+        ]
+        orders = await db.orders.aggregate(pipeline).to_list(min(limit, 100))
+    else:
+        # Kept as a plain array (not {items, total}) so every existing caller keeps working —
+        # the frontend infers "more pages" by checking whether a full page came back.
+        cursor = db.orders.find(query, {"_id": 0}).sort("created_at", -1).skip(max(offset, 0))
+        orders = await cursor.to_list(min(limit, 100))
     return await enrich_orders(orders)
 
 
@@ -550,7 +665,9 @@ async def accept_proposal(proposal_id: str, current=Depends(get_current_user)):
     # tap or two near-simultaneous accepts can't both go through and clobber worker_id.
     claimed = await db.orders.find_one_and_update(
         {"id": proposal["order_id"], "status": "published"},
-        {"$set": {"status": "accepted", "worker_id": proposal["worker_id"], "accepted_amount": proposal["amount"]}},
+        # accepted_at feeds metrics.py's "tempo até a contratação" — forward-only,
+        # orders accepted before this field existed just have no value for it.
+        {"$set": {"status": "accepted", "worker_id": proposal["worker_id"], "accepted_amount": proposal["amount"], "accepted_at": now()}},
     )
     if not claimed:
         raise HTTPException(400, "Este pedido já teve uma proposta aceita.")

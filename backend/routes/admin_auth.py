@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from admin_auth import create_admin_token, get_current_admin_user, hash_password, require_permission, verify_password
 from admin_permissions import permissions_for_role
 from auth import rate_limit
+from bank_encryption import decrypt_field, encrypt_field
 from database import db, new_id, now
 from models import AdminLoginIn, Admin2FAVerifyIn, AdminUserCreateIn, AdminUserPatchIn
 from routes.admin import log_action
@@ -51,7 +52,7 @@ async def admin_login(body: AdminLoginIn, request: Request):
         raise HTTPException(403, "Esta conta administrativa foi desativada.")
     if admin.get("totp_enabled"):
         code = (body.totp_code or "").strip()
-        if not code or not pyotp.TOTP(admin["totp_secret"]).verify(code, valid_window=1):
+        if not code or not pyotp.TOTP(decrypt_field(admin["totp_secret"])).verify(code, valid_window=1):
             await log_action(admin["id"], "ADMIN_LOGIN", f"admin:{admin['id']}", ip=ip, result="failure", metadata={"reason": "totp"})
             raise HTTPException(401, "Código de autenticação de dois fatores inválido.")
     token = create_admin_token(admin["id"], admin.get("token_version", 0))
@@ -80,8 +81,10 @@ async def admin_2fa_setup(admin: dict = Depends(get_current_admin_user)):
     rate_limit(f"admin-2fa-setup:{admin['id']}", max_attempts=10, window_seconds=600)
     secret = pyotp.random_base32()
     # Stored as "pending" until confirmed via /2fa/verify — never activates a secret
-    # the caller hasn't proven they can actually generate codes with.
-    await db.admin_users.update_one({"id": admin["id"]}, {"$set": {"totp_secret_pending": secret}})
+    # the caller hasn't proven they can actually generate codes with. Encrypted at
+    # rest same as bank_accounts fields (bank_encryption.py) — a TOTP secret is as
+    # sensitive as a password, plaintext-in-DB was a real finding, not theoretical.
+    await db.admin_users.update_one({"id": admin["id"]}, {"$set": {"totp_secret_pending": encrypt_field(secret)}})
     uri = pyotp.TOTP(secret).provisioning_uri(name=admin["email"], issuer_name="FAZUM Admin")
     return {"secret": secret, "otpauth_url": uri}
 
@@ -92,9 +95,10 @@ async def admin_2fa_verify(body: Admin2FAVerifyIn, admin: dict = Depends(get_cur
     pending = admin.get("totp_secret_pending")
     if not pending:
         raise HTTPException(400, "Nenhuma configuração de 2FA em andamento. Inicie novamente.")
-    if not pyotp.TOTP(pending).verify((body.code or "").strip(), valid_window=1):
+    if not pyotp.TOTP(decrypt_field(pending)).verify((body.code or "").strip(), valid_window=1):
         raise HTTPException(401, "Código inválido. Tente novamente.")
     await db.admin_users.update_one({"id": admin["id"]}, {
+        # already encrypted (set that way in /2fa/setup) — carried over verbatim.
         "$set": {"totp_secret": pending, "totp_enabled": True},
         "$unset": {"totp_secret_pending": ""},
     })
@@ -109,7 +113,7 @@ async def admin_2fa_disable(body: Admin2FAVerifyIn, admin: dict = Depends(get_cu
         raise HTTPException(400, "A autenticação de dois fatores não está ativada.")
     # Disabling 2FA needs the SAME proof of possession that enabling it did — a
     # hijacked session token alone must never be enough to strip this protection.
-    if not pyotp.TOTP(admin["totp_secret"]).verify((body.code or "").strip(), valid_window=1):
+    if not pyotp.TOTP(decrypt_field(admin["totp_secret"])).verify((body.code or "").strip(), valid_window=1):
         raise HTTPException(401, "Código inválido.")
     await db.admin_users.update_one({"id": admin["id"]}, {
         "$set": {"totp_enabled": False}, "$unset": {"totp_secret": "", "totp_secret_pending": ""},

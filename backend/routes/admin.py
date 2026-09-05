@@ -2,16 +2,21 @@ import re
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi.concurrency import run_in_threadpool
 
-from admin_auth import require_permission
+import geo_catalog_repo as geo_repo
+from admin_auth import require_permission, require_step_up_totp
+from admin_permissions import has_permission
 from auth import rate_limit
 from database import db, new_id, now
 from feature_flags import list_flags, set_flag
+from metrics import compute_platform_metrics
 from models import (
     ActivePatch, AdminAccountStatusIn, AdminAdjustmentIn, AdminDisputeActionIn, AdminReportActionIn,
-    AdminRiskFlagActionIn, AdminWithdrawalActionIn, CategoryIn, CommissionConfigIn, FeatureFlagPatchIn,
-    GeoCityIn, GeoNeighborhoodIn, GeoStateIn, NotificationSendIn, SubcategoryIn,
+    AdminRiskFlagActionIn, AdminWithdrawalActionIn, AdminWithdrawalApproveIn, CategoryIn, CommissionConfigIn,
+    FeatureFlagPatchIn, GeoCityIn, GeoNeighborhoodIn, GeoStateIn, NotificationSendIn, SubcategoryIn,
 )
+from trust_index import compute_trust_index
 from wallet import (
     PLATFORM_WALLET_USER_ID, InsufficientFundsError, credit_wallet, debit_wallet,
     get_commission_config, move_bucket, to_cents, wallet_public,
@@ -52,6 +57,17 @@ async def overview(admin=Depends(require_permission("dashboard.view"))):
     }
 
 
+@router.get("/metrics")
+async def platform_metrics(days: Optional[int] = None, admin=Depends(require_permission("dashboard.view"))):
+    result = await compute_platform_metrics(days=days)
+    # Money fields are the one part of this report SUPPORT shouldn't see — same
+    # conditional-inclusion pattern as trust_index on GET /admin/users/{id}.
+    if not has_permission(admin["permissions"], "payments.view"):
+        result.pop("revenue", None)
+        result.pop("gmv", None)
+    return result
+
+
 # ---------- users ----------
 
 @router.get("/users")
@@ -84,7 +100,13 @@ async def user_detail(user_id: str, admin=Depends(require_permission("users.view
     payments = await db.payments.find({"$or": [{"client_id": user_id}, {"worker_id": user_id}]}, {"_id": 0}).sort("created_at", -1).to_list(50)
     disputes = await db.disputes.find({"reporter_id": user_id}, {"_id": 0}).sort("created_at", -1).to_list(20)
     reports = await db.reports.find({"$or": [{"reporter_id": user_id}, {"target_type": "user", "target_id": user_id}]}, {"_id": 0}).sort("created_at", -1).to_list(20)
-    return {"user": user, "orders": orders, "payments": payments, "disputes": disputes, "reports": reports}
+    result = {"user": user, "orders": orders, "payments": payments, "disputes": disputes, "reports": reports}
+    # Internal-only signal (see trust_index.py) — included only for admins who can
+    # already see risk signals elsewhere (risk_flags), omitted (not 403'd) for
+    # everyone else so the rest of this view stays usable without it.
+    if has_permission(admin["permissions"], "risk.view"):
+        result["trust_index"] = await compute_trust_index(user_id)
+    return result
 
 
 @router.post("/users/{user_id}/block")
@@ -188,6 +210,8 @@ async def cancel_order(order_id: str, admin=Depends(require_permission("orders.c
 
 @router.get("/categories")
 async def categories(admin=Depends(require_permission("categories.manage"))):
+    if geo_repo.GEO_CATALOG_BACKEND == "postgres":
+        return await run_in_threadpool(geo_repo.list_categories_with_subs, False)
     cats = await db.categories.find({}, {"_id": 0}).sort("order", 1).to_list(100)
     subs = await db.subcategories.find({}, {"_id": 0}).to_list(500)
     for c in cats:
@@ -198,9 +222,12 @@ async def categories(admin=Depends(require_permission("categories.manage"))):
 @router.post("/categories")
 async def create_category(body: CategoryIn, admin=Depends(require_permission("categories.manage"))):
     rate_limit(f"admin-catalog:{admin['id']}", max_attempts=60, window_seconds=300)
-    order = await db.categories.count_documents({})
-    cat = body.model_dump() | {"id": new_id(), "order": order}
-    await db.categories.insert_one(dict(cat))
+    if geo_repo.GEO_CATALOG_BACKEND == "postgres":
+        cat = await run_in_threadpool(geo_repo.create_category, body.model_dump() | {"id": new_id()})
+    else:
+        order = await db.categories.count_documents({})
+        cat = body.model_dump() | {"id": new_id(), "order": order}
+        await db.categories.insert_one(dict(cat))
     await log_action(admin["id"], "create", f"category:{cat['id']}")
     return cat
 
@@ -209,7 +236,10 @@ async def create_category(body: CategoryIn, admin=Depends(require_permission("ca
 async def patch_category(cat_id: str, body: ActivePatch, admin=Depends(require_permission("categories.manage"))):
     rate_limit(f"admin-catalog:{admin['id']}", max_attempts=60, window_seconds=300)
     data = {k: v for k, v in body.model_dump().items() if v is not None}
-    await db.categories.update_one({"id": cat_id}, {"$set": data})
+    if geo_repo.GEO_CATALOG_BACKEND == "postgres":
+        await run_in_threadpool(geo_repo.patch_category, cat_id, data)
+    else:
+        await db.categories.update_one({"id": cat_id}, {"$set": data})
     await log_action(admin["id"], "update", f"category:{cat_id}")
     return {"ok": True}
 
@@ -218,7 +248,10 @@ async def patch_category(cat_id: str, body: ActivePatch, admin=Depends(require_p
 async def create_subcategory(body: SubcategoryIn, admin=Depends(require_permission("categories.manage"))):
     rate_limit(f"admin-catalog:{admin['id']}", max_attempts=60, window_seconds=300)
     sub = body.model_dump() | {"id": new_id()}
-    await db.subcategories.insert_one(dict(sub))
+    if geo_repo.GEO_CATALOG_BACKEND == "postgres":
+        sub = await run_in_threadpool(geo_repo.create_subcategory, sub)
+    else:
+        await db.subcategories.insert_one(dict(sub))
     await log_action(admin["id"], "create", f"subcategory:{sub['id']}")
     return sub
 
@@ -227,7 +260,10 @@ async def create_subcategory(body: SubcategoryIn, admin=Depends(require_permissi
 async def patch_subcategory(sub_id: str, body: ActivePatch, admin=Depends(require_permission("categories.manage"))):
     rate_limit(f"admin-catalog:{admin['id']}", max_attempts=60, window_seconds=300)
     data = {k: v for k, v in body.model_dump().items() if v is not None}
-    await db.subcategories.update_one({"id": sub_id}, {"$set": data})
+    if geo_repo.GEO_CATALOG_BACKEND == "postgres":
+        await run_in_threadpool(geo_repo.patch_subcategory, sub_id, data)
+    else:
+        await db.subcategories.update_one({"id": sub_id}, {"$set": data})
     await log_action(admin["id"], "update", f"subcategory:{sub_id}")
     return {"ok": True}
 
@@ -236,6 +272,12 @@ async def patch_subcategory(sub_id: str, body: ActivePatch, admin=Depends(requir
 
 @router.get("/geo")
 async def geo(admin=Depends(require_permission("geo.manage"))):
+    if geo_repo.GEO_CATALOG_BACKEND == "postgres":
+        return {
+            "states": await run_in_threadpool(geo_repo.list_states, False),
+            "cities": await run_in_threadpool(geo_repo.list_cities, None, False),
+            "neighborhoods": await run_in_threadpool(geo_repo.list_neighborhoods, None, False),
+        }
     return {
         "states": await db.states.find({}, {"_id": 0}).to_list(50),
         "cities": await db.cities.find({}, {"_id": 0}).sort("name", 1).to_list(300),
@@ -247,7 +289,10 @@ async def geo(admin=Depends(require_permission("geo.manage"))):
 async def create_state(body: GeoStateIn, admin=Depends(require_permission("geo.manage"))):
     rate_limit(f"admin-geo:{admin['id']}", max_attempts=60, window_seconds=300)
     state = body.model_dump() | {"id": new_id()}
-    await db.states.insert_one(dict(state))
+    if geo_repo.GEO_CATALOG_BACKEND == "postgres":
+        state = await run_in_threadpool(geo_repo.create_state, state)
+    else:
+        await db.states.insert_one(dict(state))
     await log_action(admin["id"], "create", f"state:{state['id']}")
     return state
 
@@ -256,7 +301,10 @@ async def create_state(body: GeoStateIn, admin=Depends(require_permission("geo.m
 async def create_city(body: GeoCityIn, admin=Depends(require_permission("geo.manage"))):
     rate_limit(f"admin-geo:{admin['id']}", max_attempts=60, window_seconds=300)
     city = body.model_dump() | {"id": new_id()}
-    await db.cities.insert_one(dict(city))
+    if geo_repo.GEO_CATALOG_BACKEND == "postgres":
+        city = await run_in_threadpool(geo_repo.create_city, city)
+    else:
+        await db.cities.insert_one(dict(city))
     await log_action(admin["id"], "create", f"city:{city['id']}")
     return city
 
@@ -265,7 +313,10 @@ async def create_city(body: GeoCityIn, admin=Depends(require_permission("geo.man
 async def create_neighborhood(body: GeoNeighborhoodIn, admin=Depends(require_permission("geo.manage"))):
     rate_limit(f"admin-geo:{admin['id']}", max_attempts=60, window_seconds=300)
     hood = body.model_dump() | {"id": new_id()}
-    await db.neighborhoods.insert_one(dict(hood))
+    if geo_repo.GEO_CATALOG_BACKEND == "postgres":
+        hood = await run_in_threadpool(geo_repo.create_neighborhood, hood)
+    else:
+        await db.neighborhoods.insert_one(dict(hood))
     await log_action(admin["id"], "create", f"neighborhood:{hood['id']}")
     return hood
 
@@ -273,11 +324,14 @@ async def create_neighborhood(body: GeoNeighborhoodIn, admin=Depends(require_per
 @router.patch("/geo/{kind}/{item_id}")
 async def patch_geo(kind: str, item_id: str, body: ActivePatch, admin=Depends(require_permission("geo.manage"))):
     rate_limit(f"admin-geo:{admin['id']}", max_attempts=60, window_seconds=300)
-    coll = {"states": db.states, "cities": db.cities, "neighborhoods": db.neighborhoods}.get(kind)
-    if coll is None:
-        raise HTTPException(400, "Tipo inválido")
     data = {k: v for k, v in body.model_dump().items() if v is not None}
-    await coll.update_one({"id": item_id}, {"$set": data})
+    if geo_repo.GEO_CATALOG_BACKEND == "postgres":
+        await run_in_threadpool(geo_repo.patch_geo, kind, item_id, data)
+    else:
+        coll = {"states": db.states, "cities": db.cities, "neighborhoods": db.neighborhoods}.get(kind)
+        if coll is None:
+            raise HTTPException(400, "Tipo inválido")
+        await coll.update_one({"id": item_id}, {"$set": data})
     await log_action(admin["id"], "update", f"{kind}:{item_id}")
     return {"ok": True}
 
@@ -343,6 +397,8 @@ async def admin_adjust_wallet(user_id: str, body: AdminAdjustmentIn, admin=Depen
     rate_limit(f"admin-wallet-adjust:{admin['id']}", max_attempts=300, window_seconds=600)
     if body.amount == 0:
         raise HTTPException(400, "Informe um valor diferente de zero.")
+    config = await get_commission_config()
+    require_step_up_totp(admin, body.totp_code, abs(body.amount), config["admin_reauth_threshold"])
     cents = to_cents(abs(body.amount))
     if body.amount > 0:
         txn = await credit_wallet(user_id, cents, "ADJUSTMENT", reference_type="admin_adjustment", reference_id=admin["id"],
@@ -365,9 +421,18 @@ async def admin_list_withdrawals(status: Optional[str] = None, admin=Depends(req
 
 
 @router.post("/withdrawals/{withdrawal_id}/approve")
-async def admin_approve_withdrawal(withdrawal_id: str, admin=Depends(require_permission("withdrawals.manage"))):
+async def admin_approve_withdrawal(withdrawal_id: str, body: AdminWithdrawalApproveIn = AdminWithdrawalApproveIn(),
+                                    admin=Depends(require_permission("withdrawals.manage"))):
     rate_limit(f"admin-withdrawal-action:{admin['id']}", max_attempts=30, window_seconds=600)
-    # Atomic claim first — a double-click or two admins approving the same withdrawal
+    # Read-only preview before the atomic claim below — the step-up check needs to
+    # know the amount, and checking it here (instead of after claiming) means a
+    # failed 2FA check never has to "undo" a claim that already flipped the status.
+    preview = await db.withdrawals.find_one({"id": withdrawal_id, "status": {"$in": ["PENDING", "REVIEW_REQUIRED"]}}, {"_id": 0, "amount": 1})
+    if not preview:
+        raise HTTPException(400, "Esse saque não pode mais ser aprovado")
+    config = await get_commission_config()
+    require_step_up_totp(admin, body.totp_code, preview["amount"], config["admin_reauth_threshold"])
+    # Atomic claim — a double-click or two admins approving the same withdrawal
     # concurrently can only have one of them actually flip PENDING/REVIEW_REQUIRED ->
     # COMPLETED; the debit below only ever runs once, for whichever request wins.
     withdrawal = await db.withdrawals.find_one_and_update(

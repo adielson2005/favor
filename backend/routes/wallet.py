@@ -1,17 +1,18 @@
-import hashlib
 import hmac
 import os
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
+from asaas_customers import AsaasCustomerRejectedError, CpfRequiredError
 from auth import get_current_user, rate_limit, verify_password
+from bank_encryption import decrypt_field, encrypt_field
 from database import db, new_id, now
 from fraud import check_withdrawal_risk, create_risk_flag
 from models import (
     BankAccountIn, BankAccountRemoveIn, DepositIn, DisputeIn, WithdrawalIn,
 )
-from payments import PaymentProviderError, get_payment_provider
+from payments import PaymentProviderError, PaymentProviderUnavailable, get_payment_provider
 from security_events import log_security_event
 from verification import require_active_account
 from wallet import (
@@ -26,9 +27,9 @@ ALLOWED_IMAGE_PREFIXES = ("data:image/jpeg", "data:image/jpg", "data:image/png",
 
 
 def mask_account(account: dict) -> dict:
-    number = account.get("account_number", "")
+    number = decrypt_field(account.get("account_number", ""))
     masked = f"****{number[-4:]}" if len(number) >= 4 else "****"
-    doc = account.get("document", "")
+    doc = decrypt_field(account.get("document", ""))
     masked_doc = f"***.***.***-{doc[-2:]}" if len(doc) >= 2 else "***"
     return {k: account.get(k) for k in ("id", "holder_name", "bank_code", "agency", "account_type", "is_primary", "created_at")} | {
         "account_number_masked": masked, "document_masked": masked_doc,
@@ -80,14 +81,33 @@ async def create_deposit(body: DepositIn, current=Depends(get_current_user), ide
         deposit["idempotency_key"] = idempotency_key
     provider = get_payment_provider()
     try:
-        result = await provider.create_pix_charge(to_cents(body.amount), reference=deposit["id"], description="Depósito fazum")
+        result = await provider.create_pix_charge(
+            to_cents(body.amount), reference=deposit["id"], user_id=current["id"], name=current["name"],
+            document=body.document, description="Depósito fazum",
+        )
         deposit["status"] = "PROCESSING"
         deposit["provider"] = provider.name
         deposit["provider_transaction_id"] = result.get("id")
-    except PaymentProviderError as e:
+        deposit["qr_code_image"] = result.get("qr_code_image")
+        deposit["qr_code_payload"] = result.get("qr_code_payload")
+        deposit["expires_at"] = result.get("expires_at")
+    except CpfRequiredError:
+        # Not a provider failure — the gateway is configured and working, this
+        # specific user just doesn't have a CPF/CNPJ on file yet. No deposit row
+        # is created; the client resubmits the same request with `document` set.
+        raise HTTPException(400, "Precisamos do seu CPF ou CNPJ para gerar o Pix.")
+    except AsaasCustomerRejectedError as e:
+        deposit["status"] = "FAILED"
+        await db.deposits.insert_one(dict(deposit))
+        raise HTTPException(400, e.message)
+    except PaymentProviderUnavailable:
         deposit["status"] = "FAILED"
         await db.deposits.insert_one(dict(deposit))
         raise HTTPException(501, "Depósito ainda não está disponível — nenhum provedor de pagamento foi configurado neste servidor.")
+    except PaymentProviderError as e:
+        deposit["status"] = "FAILED"
+        await db.deposits.insert_one(dict(deposit))
+        raise HTTPException(400, e.message)
     await db.deposits.insert_one(dict(deposit))
     return {k: v for k, v in deposit.items() if k != "_id"}
 
@@ -123,7 +143,12 @@ async def add_bank_account(body: BankAccountIn, request: Request, current=Depend
         "account_number": body.account_number, "account_type": body.account_type,
         "is_primary": existing_count == 0, "active": True, "created_at": now(),
     }
-    await db.bank_accounts.insert_one(dict(account))
+    # CPF/CNPJ and account number are the only fields worth encrypting at rest here —
+    # everything else (bank code, agency, holder name) is already low-sensitivity or
+    # shown in full elsewhere. `account` (plaintext) is kept for the notification text
+    # and the mask_account() call below; only the stored copy is encrypted.
+    stored = {**account, "document": encrypt_field(account["document"]), "account_number": encrypt_field(account["account_number"])}
+    await db.bank_accounts.insert_one(stored)
     await log_security_event(current["id"], "bank_account_added", detail=account["id"], ip=request.client.host if request.client else None)
     await db.notifications.insert_one({
         "id": new_id(), "user_id": current["id"], "title": "Conta bancária adicionada",
@@ -294,18 +319,70 @@ async def list_my_disputes(current=Depends(get_current_user)):
     return await db.disputes.find({"reporter_id": current["id"]}, {"_id": 0}).sort("created_at", -1).to_list(50)
 
 
-# ---------- webhook (inert until a real provider is configured) ----------
+# ---------- webhook ----------
+
+DEPOSIT_RECEIVED_EVENTS = ("PAYMENT_RECEIVED", "PAYMENT_CONFIRMED")
+DEPOSIT_FAILED_EVENTS = ("PAYMENT_OVERDUE", "PAYMENT_DELETED")
+DEPOSIT_REFUND_EVENTS = ("PAYMENT_REFUNDED", "PAYMENT_PARTIALLY_REFUNDED")
+
+
+async def _find_deposit_for_payment(payment: dict) -> Optional[dict]:
+    provider_txn_id = payment.get("id")
+    if provider_txn_id:
+        deposit = await db.deposits.find_one({"provider_transaction_id": provider_txn_id})
+        if deposit:
+            return deposit
+    external_ref = payment.get("externalReference")
+    if external_ref:
+        return await db.deposits.find_one({"id": external_ref})
+    return None
+
+
+async def _reconcile_deposit_event(event: str, payload: dict) -> None:
+    payment = payload.get("payment") or {}
+    deposit = await _find_deposit_for_payment(payment)
+    if not deposit:
+        return
+
+    if event in DEPOSIT_RECEIVED_EVENTS and deposit["status"] == "PROCESSING":
+        await credit_wallet(
+            user_id=deposit["user_id"], amount_cents=to_cents(deposit["amount"]), type_="DEPOSIT",
+            reference_type="deposit", reference_id=deposit["id"], provider="asaas",
+            provider_transaction_id=payment.get("id"), description="Depósito via PIX confirmado",
+            idempotency_key=f"deposit-credit:{deposit['id']}",
+        )
+        await db.deposits.update_one({"id": deposit["id"]}, {"$set": {
+            "status": "COMPLETED", "provider_transaction_id": payment.get("id"), "updated_at": now(),
+        }})
+    elif event in DEPOSIT_FAILED_EVENTS and deposit["status"] in ("PENDING", "PROCESSING"):
+        await db.deposits.update_one({"id": deposit["id"]}, {"$set": {"status": "FAILED", "updated_at": now()}})
+    elif event in DEPOSIT_REFUND_EVENTS and deposit["status"] == "COMPLETED":
+        try:
+            await debit_wallet(
+                user_id=deposit["user_id"], amount_cents=to_cents(deposit["amount"]), type_="DEPOSIT_REFUND",
+                reference_type="deposit", reference_id=deposit["id"], description="Estorno de depósito via PIX",
+                idempotency_key=f"deposit-refund:{deposit['id']}", count_as_spent=False,
+            )
+            await db.deposits.update_one({"id": deposit["id"]}, {"$set": {"status": "REFUNDED", "updated_at": now()}})
+        except InsufficientFundsError:
+            # Saldo já foi gasto pelo usuário — não dá pra estornar automaticamente sem
+            # deixar a carteira negativa. Registrado para revisão manual de um admin em
+            # vez de fingir sucesso ou derrubar o webhook (que precisa sempre voltar 200
+            # para a ASAAS não entrar em loop de retentativa).
+            await db.deposits.update_one({"id": deposit["id"]}, {"$set": {"status": "REFUND_NEEDS_REVIEW", "updated_at": now()}})
+            await log_security_event(deposit["user_id"], "deposit_refund_needs_manual_review", detail=deposit["id"])
+
 
 @router.post("/webhooks/payment-provider")
 async def payment_webhook(request: Request):
     secret = os.environ.get("ASAAS_WEBHOOK_SECRET", "")
     if not secret:
         raise HTTPException(501, "Webhook não configurado neste servidor.")
-    signature = request.headers.get("asaas-signature", "")
-    body = await request.body()
-    expected = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(signature, expected):
-        raise HTTPException(401, "Assinatura inválida.")
+    # A ASAAS não assina o corpo — ela ecoa de volta um token estático (configurado no
+    # painel ASAAS) neste header, a cada chamada. Comparação direta, não HMAC do payload.
+    token = request.headers.get("asaas-access-token", "")
+    if not hmac.compare_digest(token, secret):
+        raise HTTPException(401, "Token de acesso inválido.")
     payload = await request.json()
     event_id = payload.get("id") or payload.get("event")
     if not event_id:
@@ -313,6 +390,5 @@ async def payment_webhook(request: Request):
     if await db.payment_events.find_one({"event_id": event_id}):
         return {"ok": True, "duplicate": True}
     await db.payment_events.insert_one({"id": new_id(), "event_id": event_id, "payload": payload, "processed_at": now()})
-    # No live provider is wired in yet, so there is nothing further to reconcile —
-    # this endpoint exists, verifies signatures, and dedupes, ready for real events.
+    await _reconcile_deposit_event(payload.get("event", ""), payload)
     return {"ok": True}

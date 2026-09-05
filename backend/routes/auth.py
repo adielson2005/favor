@@ -4,12 +4,15 @@ import time
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
 from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token as google_id_token
 
+import geo_catalog_repo as geo_repo
 from auth import (
     create_token, get_current_user, hash_password, rate_limit, verify_password,
 )
+from data_export import compile_user_export
 from auth_accounts import (
     PROVIDER_GOOGLE, PROVIDER_PASSWORD, find_user_id_by_account, link_account, list_accounts, unlink_account,
 )
@@ -103,7 +106,10 @@ async def register(body: RegisterIn, request: Request):
         raise HTTPException(400, "Já existe uma conta com este e-mail.")
     if await db.users.find_one({"phone": phone}):
         raise HTTPException(400, "Já existe uma conta com este telefone.")
-    city = await db.cities.find_one({"id": body.city_id}, {"_id": 0, "state_id": 1})
+    if geo_repo.GEO_CATALOG_BACKEND == "postgres":
+        city = await run_in_threadpool(geo_repo.get_city, body.city_id)
+    else:
+        city = await db.cities.find_one({"id": body.city_id}, {"_id": 0, "state_id": 1})
     user = {
         "id": new_id(), "name": body.name.strip(), "email": email, "phone": phone,
         "password_hash": hash_password(body.password),
@@ -209,7 +215,10 @@ async def google_auth(body: GoogleAuthIn, request: Request):
     # Genuinely new person — create the account with only what's needed (name,
     # e-mail, picture if Google provided one, the Google identifier itself).
     name = payload.get("name") or email.split("@")[0]
-    city = await db.cities.find_one({"id": body.city_id}, {"_id": 0, "state_id": 1})
+    if geo_repo.GEO_CATALOG_BACKEND == "postgres":
+        city = await run_in_threadpool(geo_repo.get_city, body.city_id)
+    else:
+        city = await db.cities.find_one({"id": body.city_id}, {"_id": 0, "state_id": 1})
     user = {
         # No "phone" key at all (not even None) — `phone` has a sparse unique index,
         # and MongoDB's sparse indexes only skip documents where the field is truly
@@ -489,6 +498,15 @@ async def delete_account(user: dict = Depends(get_current_user)):
         "$unset": {"phone": ""},
     })
     return {"message": "Conta excluída."}
+
+
+@router.get("/me/export")
+async def export_my_data(user: dict = Depends(get_current_user)):
+    # LGPD Art. 18 (direito de acesso). Not a routine action — 5/hour is generous
+    # for "download my data" while ruling out accidental/scripted scraping.
+    rate_limit(f"data-export:{user['id']}", max_attempts=5, window_seconds=3600)
+    await log_security_event(user["id"], "data_export_requested")
+    return await compile_user_export(user["id"])
 
 
 @router.patch("/preference")

@@ -98,6 +98,9 @@ ROLE_PERMISSIONS = {
         "support.manage",
         "feedback.view",
         "feedback.manage",
+        # Read-only — the spec frames SUPPORT as "support/risk staff"; risk.manage
+        # (mutating risk_flags) stays MANAGER/OWNER-only per least-privilege.
+        "risk.view",
     ),
     "MAINTENANCE": (
         "maintenance.view",

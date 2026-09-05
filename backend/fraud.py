@@ -69,7 +69,7 @@ def _hours_since(iso_str: Optional[str]) -> Optional[float]:
         return None
 
 
-async def _cancellation_rate(user_id: str) -> float:
+async def cancellation_rate(user_id: str) -> float:
     query = {"$or": [{"client_id": user_id}, {"worker_id": user_id}]}
     total = await db.orders.count_documents(query)
     if not total:
@@ -78,14 +78,14 @@ async def _cancellation_rate(user_id: str) -> float:
     return cancelled / total
 
 
-async def _dispute_count(user_id: str) -> int:
+async def dispute_count(user_id: str) -> int:
     order_ids = [o["id"] async for o in db.orders.find({"$or": [{"client_id": user_id}, {"worker_id": user_id}]}, {"id": 1})]
     if not order_ids:
         return 0
     return await db.disputes.count_documents({"order_id": {"$in": order_ids}})
 
 
-async def _reports_against(user_id: str) -> int:
+async def reports_against(user_id: str) -> int:
     return await db.reports.count_documents({"target_type": "user", "target_id": user_id, "status": {"$ne": "REJECTED"}})
 
 
@@ -127,13 +127,13 @@ async def check_withdrawal_risk(user: dict, amount_cents: int, bank_account: dic
     if not user.get("verified_email"):
         reasons.append("unverified_email")
 
-    if await _cancellation_rate(user["id"]) >= HIGH_CANCELLATION_RATE:
+    if await cancellation_rate(user["id"]) >= HIGH_CANCELLATION_RATE:
         reasons.append("high_cancellation_rate")
 
-    if await _dispute_count(user["id"]) >= MANY_DISPUTES:
+    if await dispute_count(user["id"]) >= MANY_DISPUTES:
         reasons.append("many_disputes")
 
-    if await _reports_against(user["id"]) >= MANY_REPORTS:
+    if await reports_against(user["id"]) >= MANY_REPORTS:
         reasons.append("many_reports")
 
     return _level_for_reasons(reasons), reasons
@@ -150,13 +150,13 @@ async def check_payment_risk(user: dict, amount_cents: int, order: dict, client_
     if age_hours is not None and age_hours < NEW_ACCOUNT_HOURS:
         reasons.append("new_account")
 
-    if await _cancellation_rate(user["id"]) >= HIGH_CANCELLATION_RATE:
+    if await cancellation_rate(user["id"]) >= HIGH_CANCELLATION_RATE:
         reasons.append("high_cancellation_rate")
 
-    if await _dispute_count(user["id"]) >= MANY_DISPUTES:
+    if await dispute_count(user["id"]) >= MANY_DISPUTES:
         reasons.append("many_disputes")
 
-    if await _reports_against(user["id"]) >= MANY_REPORTS:
+    if await reports_against(user["id"]) >= MANY_REPORTS:
         reasons.append("many_reports")
 
     avg_cents = await _avg_payment_cents(user["id"])

@@ -12,10 +12,8 @@ import uuid
 import pyotp
 import pytest
 import requests
-from dotenv import dotenv_values
 
-BASE_URL = (dotenv_values('/app/frontend/.env').get('EXPO_PUBLIC_BACKEND_URL')
-            or os.environ.get('EXPO_PUBLIC_BACKEND_URL')).rstrip('/')
+BASE_URL = os.environ.get('BACKEND_URL', 'http://localhost:8000').rstrip('/')
 API = f"{BASE_URL}/api"
 
 TAG = f"ADMPNL_{uuid.uuid4().hex[:6]}"
@@ -91,7 +89,6 @@ def support_token(api, admin_token):
     ("GET", "/admin/payments", None),
     ("GET", "/admin/config", None),
     ("PATCH", "/admin/config", {"commission_percent": 20}),
-    ("GET", "/admin/risk-flags", None),
     ("GET", "/admin/security-events", None),
     ("GET", "/admin/audit", None),
     ("GET", "/admin/feature-flags", None),
@@ -115,10 +112,23 @@ def test_support_cannot_access_owner_only_endpoints(api, support_token, method, 
     ("GET", "/admin/reports"),
     ("GET", "/admin/disputes"),
     ("GET", "/admin/tickets"),
+    # SUPPORT gained risk.view (read-only) so the internal trust index — framed as
+    # a signal for "support/risk staff" — is actually visible to them; risk.manage
+    # (mutating risk_flags) stays MANAGER/OWNER-only, tested separately below.
+    ("GET", "/admin/risk-flags"),
 ])
 def test_support_can_access_allowed_endpoints(api, support_token, method, path):
     r = api.request(method, f"{API}{path}", headers=auth(support_token), timeout=15)
     assert r.status_code == 200, f"{method} {path} -> {r.status_code} {r.text}"
+
+
+def test_support_still_cannot_manage_risk_flags(api, support_token):
+    flags = api.get(f"{API}/admin/risk-flags", headers=auth(support_token), timeout=15).json()
+    if not flags:
+        pytest.skip("no risk_flags in this environment to attempt managing")
+    flag_id = flags[0]["id"]
+    r = api.patch(f"{API}/admin/risk-flags/{flag_id}", headers=auth(support_token), json={"status": "RESOLVED", "note": "x"}, timeout=15)
+    assert r.status_code == 403, r.text
 
 
 def test_support_can_block_and_verify_users_but_not_change_status(api, support_token):

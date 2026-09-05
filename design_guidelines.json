@@ -208,8 +208,7 @@
     "Preserve content hierarchy: need first, trust second, action third.",
     "Keep the app feeling like Android mobile UI, not a desktop website squeezed into a phone.",
     "Keep gradients below 20% of the interface and prefer texture, contrast and layering.",
-    "Use Portuguese-Brazilian copy with concise, warm language and local place names.",
-    "All implementation files are JavaScript (.js); do not provide TypeScript or .tsx guidance."
+    "Use Portuguese-Brazilian copy with concise, warm language and local place names."
   ],
   "instructions_to_main_agent": {
     "starter_template": "The expected frontend files were not present at the documented paths during discovery; inspect the actual repository structure before implementation.",

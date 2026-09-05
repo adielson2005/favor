@@ -1,0 +1,126 @@
+name: fazum
+description: "FAZUM - marketplace hiperlocal de servicos, Parauapebas-PA"
+# The following line prevents the package from being accidentally published to
+# pub.dev using `flutter pub publish`. This is preferred for private packages.
+publish_to: 'none' # Remove this line if you wish to publish to pub.dev
+
+# The following defines the version and build number for your application.
+# A version number is three numbers separated by dots, like 1.2.43
+# followed by an optional build number separated by a +.
+# Both the version and the builder number may be overridden in flutter
+# build by specifying --build-name and --build-number, respectively.
+# In Android, build-name is used as versionName while build-number used as versionCode.
+# Read more about Android versioning at https://developer.android.com/studio/publish/versioning
+# In iOS, build-name is used as CFBundleShortVersionString while build-number is used as CFBundleVersion.
+# Read more about iOS versioning at
+# https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
+# In Windows, build-name is used as the major, minor, and patch parts
+# of the product and file versions while build-number is used as the build suffix.
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.11.1
+
+# Dependencies specify other packages that your package needs in order to work.
+# To automatically upgrade your package dependencies to the latest versions
+# consider running `flutter pub upgrade --major-versions`. Alternatively,
+# dependencies can be manually updated by changing the version numbers below to
+# the latest version available on pub.dev. To see which dependencies have newer
+# versions available, run `flutter pub outdated`.
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # The following adds the Cupertino Icons font to your application.
+  # Use with the CupertinoIcons class for iOS style icons.
+  cupertino_icons: ^1.0.8
+
+  # Networking — talks to the existing FastAPI backend under /api, JWT bearer auth.
+  dio: ^5.7.0
+  # Session token storage — Keychain/EncryptedSharedPreferences, same guarantee as
+  # expo-secure-store on the existing React Native app.
+  flutter_secure_storage: ^9.2.2
+  # Non-secret local state (theme preference, etc.) — mirrors AsyncStorage usage.
+  shared_preferences: ^2.3.3
+  # State management — keeps logic out of widgets, matches "não coloque toda a
+  # lógica dentro das telas".
+  flutter_riverpod: ^2.6.1
+  # Declarative routing — closest Flutter equivalent to Expo Router's file-based
+  # navigation the existing app already uses.
+  go_router: ^14.6.2
+  # Currency (R$) / date formatting to match the backend's centavos-based money.
+  intl: ^0.19.0
+  # Sora (headings) + IBM Plex Sans (body) — same two families as the RN app
+  # (frontend/src/hooks/use-app-fonts.ts), fetched/cached the same way
+  # @expo-google-fonts does there.
+  google_fonts: ^6.2.1
+  # Photo picker for order creation — same role as expo-image-picker on the
+  # RN side (frontend/app/create.tsx), base64-encodes the picked image the
+  # same way so it can go straight into the same POST /orders `photos` field.
+  image_picker: ^1.1.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  # The "flutter_lints" package below contains a set of recommended lints to
+  # encourage good coding practices. The lint set provided by the package is
+  # activated in the `analysis_options.yaml` file located at the root of your
+  # package. See that file for information about deactivating specific lint
+  # rules and activating additional ones.
+  flutter_lints: ^6.0.0
+
+  # flutter_launcher_icons and flutter_native_splash are pure code-generation
+  # tools — they write real native resource files (mipmap icons,
+  # launch_background.xml, styles.xml) directly into android/ and ios/ once,
+  # then aren't needed again until brand assets change. flutter_native_splash
+  # is deliberately NOT listed here: v2.4.7 declares stale native-plugin
+  # metadata (native_build: true) that doesn't match an actual Android/iOS
+  # plugin class, which broke GeneratedPluginRegistrant.java's compile. Its
+  # already-generated output (drawable/, styles.xml, LaunchScreen assets)
+  # needs no runtime dependency to keep working — re-add temporarily, via
+  # `flutter pub add --dev flutter_native_splash`, only if brand assets ever
+  # need regenerating (see flutter_native_splash.yaml).
+  flutter_launcher_icons: ^0.14.4
+
+# For information on the generic Dart part of this file, see the
+# following page: https://dart.dev/tools/pub/pubspec
+
+# The following section is specific to Flutter packages.
+flutter:
+
+  # The following line ensures that the Material Icons font is
+  # included with your application, so that you can use the icons in
+  # the material Icons class.
+  uses-material-design: true
+
+  # To add assets to your application, add an assets section, like this:
+  # assets:
+  #   - images/a_dot_burr.jpeg
+  #   - images/a_dot_ham.jpeg
+
+  # An image asset can refer to one or more resolution-specific "variants", see
+  # https://flutter.dev/to/resolution-aware-images
+
+  # For details regarding adding assets from package dependencies, see
+  # https://flutter.dev/to/asset-from-package
+
+  # To add custom fonts to your application, add a fonts section here,
+  # in this "flutter" section. Each entry in this list should have a
+  # "family" key with the font family name, and a "fonts" key with a
+  # list giving the asset and other descriptors for the font. For
+  # example:
+  # fonts:
+  #   - family: Schyler
+  #     fonts:
+  #       - asset: fonts/Schyler-Regular.ttf
+  #       - asset: fonts/Schyler-Italic.ttf
+  #         style: italic
+  #   - family: Trajan Pro
+  #     fonts:
+  #       - asset: fonts/TrajanPro.ttf
+  #       - asset: fonts/TrajanPro_Bold.ttf
+  #         weight: 700
+  #
+  # For details regarding fonts from package dependencies,
+  # see https://flutter.dev/to/font-from-package

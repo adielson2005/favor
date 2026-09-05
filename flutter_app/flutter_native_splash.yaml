@@ -1,0 +1,13 @@
+# RN's app.json declares an expo-splash-screen plugin pointing at
+# "./assets/images/splash-image.png" with background #091323 — but that file
+# doesn't actually exist in frontend/assets/images (checked: only icon.png,
+# adaptive-icon.png, favicon.png, app-image.png, logo-mark.png, etc. are
+# there). Rather than inventing a splash graphic that has never existed in
+# this codebase, this reuses the real icon.png (the one asset that IS the
+# app's actual logo) on the same real #091323 background color RN declares.
+flutter_native_splash:
+  color: "#091323"
+  image: assets/icon/icon.png
+  android_12:
+    color: "#091323"
+    image: assets/icon/icon.png

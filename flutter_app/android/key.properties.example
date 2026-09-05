@@ -1,0 +1,15 @@
+# Copy this file to key.properties (same folder) and fill in your OWN real
+# values — key.properties is already gitignored and must never be committed.
+#
+# Generate a real release keystore yourself (this is a long-lived secret only
+# you should hold — losing it means you can never publish an update to the
+# same app listing again):
+#   keytool -genkey -v -keystore ~/fazum-release.jks -keyalg RSA -keysize 2048 \
+#     -validity 10000 -alias fazum
+#
+# See https://docs.flutter.dev/deployment/android#signing-the-app for the
+# full official walkthrough.
+storePassword=CHANGE_ME
+keyPassword=CHANGE_ME
+keyAlias=fazum
+storeFile=/absolute/path/to/fazum-release.jks

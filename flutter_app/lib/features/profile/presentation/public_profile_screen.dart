@@ -8,6 +8,7 @@ import '../../../core/models/user.dart';
 import '../../../core/models/user_stats.dart';
 import '../../../core/providers.dart';
 import '../../../core/theme/theme_controller.dart';
+import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_avatar.dart';
 import '../../../core/widgets/empty_state.dart';
 
@@ -93,7 +94,7 @@ class _PublicProfileScreenState extends ConsumerState<PublicProfileScreen> {
     );
   }
 
-  Widget _buildBody(dynamic theme, dynamic bootstrap) {
+  Widget _buildBody(AppTheme theme, dynamic bootstrap) {
     final colors = theme.colors;
     final profile = _profile!;
     final stats = _stats;
@@ -238,7 +239,7 @@ class _PublicProfileScreenState extends ConsumerState<PublicProfileScreen> {
 class _StatColumn extends StatelessWidget {
   final String label;
   final String value;
-  final dynamic theme;
+  final AppTheme theme;
   final bool showDivider;
   const _StatColumn({required this.label, required this.value, required this.theme, this.showDivider = true});
 

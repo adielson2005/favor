@@ -8,6 +8,7 @@ import 'package:image_picker/image_picker.dart';
 import '../../../core/errors/api_exception.dart';
 import '../../../core/providers.dart';
 import '../../../core/theme/theme_controller.dart';
+import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_avatar.dart';
 import '../../../core/widgets/app_button.dart';
 import '../../../core/widgets/app_text_field.dart';
@@ -467,7 +468,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
 class _StatColumn extends StatelessWidget {
   final String label;
   final String value;
-  final dynamic theme;
+  final AppTheme theme;
   final bool showDivider;
   const _StatColumn({required this.label, required this.value, required this.theme, this.showDivider = true});
 
@@ -489,7 +490,7 @@ class _StatColumn extends StatelessWidget {
 class _Section extends StatelessWidget {
   final String title;
   final List<Widget> children;
-  final dynamic theme;
+  final AppTheme theme;
   const _Section({required this.title, required this.children, required this.theme});
 
   @override
@@ -517,7 +518,7 @@ class _ProfileRow extends StatelessWidget {
   final Color? valueColor;
   final bool danger;
   final VoidCallback? onTap;
-  final dynamic theme;
+  final AppTheme theme;
 
   const _ProfileRow({
     required this.icon,
@@ -562,7 +563,7 @@ class _ProfileRow extends StatelessWidget {
 class _Chip extends StatelessWidget {
   final String label;
   final bool active;
-  final dynamic theme;
+  final AppTheme theme;
   final VoidCallback onTap;
   const _Chip({required this.label, required this.active, required this.theme, required this.onTap});
 

@@ -8,6 +8,7 @@ import '../../../core/models/payment.dart';
 import '../../../core/models/proposal.dart';
 import '../../../core/providers.dart';
 import '../../../core/theme/theme_controller.dart';
+import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_avatar.dart';
 import '../../../core/widgets/app_button.dart';
 import '../../../core/widgets/app_text_field.dart';
@@ -280,7 +281,7 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
     );
   }
 
-  Widget _buildOrderCard(dynamic theme) {
+  Widget _buildOrderCard(AppTheme theme) {
     final colors = theme.colors;
     final order = _order!;
     return Container(
@@ -317,7 +318,7 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
   /// completes/cancels) — the buttons shown here are a UI convenience, the
   /// backend is the actual authority and would reject a call from the wrong
   /// role or the wrong status regardless of what this screen shows.
-  Widget _buildLifecycleSection(dynamic theme) {
+  Widget _buildLifecycleSection(AppTheme theme) {
     final colors = theme.colors;
     final order = _order!;
     final me = ref.read(authControllerProvider).user;
@@ -425,7 +426,7 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: steps);
   }
 
-  Widget _buildProposalsForOwner(dynamic theme) {
+  Widget _buildProposalsForOwner(AppTheme theme) {
     final colors = theme.colors;
     if (_proposals.isEmpty) {
       return Text('Ainda não chegaram propostas para este pedido.',
@@ -448,7 +449,7 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
     ]);
   }
 
-  Widget _buildProposalFormForWorker(dynamic theme) {
+  Widget _buildProposalFormForWorker(AppTheme theme) {
     final colors = theme.colors;
     final myProposal = _proposals.where((p) => p.workerId == ref.read(authControllerProvider).user?.id).firstOrNull;
 
@@ -515,7 +516,7 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
 class _Tag extends StatelessWidget {
   final IconData icon;
   final String text;
-  final dynamic theme;
+  final AppTheme theme;
   final Color? color;
   const _Tag({required this.icon, required this.text, required this.theme, this.color});
 
@@ -533,7 +534,7 @@ class _Tag extends StatelessWidget {
 
 class _ProposalCard extends StatelessWidget {
   final Proposal proposal;
-  final dynamic theme;
+  final AppTheme theme;
   final bool showAcceptAction;
   final bool acting;
   final VoidCallback onAccept;

@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../../core/errors/api_exception.dart';
 import '../../../core/theme/theme_controller.dart';
+import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_button.dart';
 import '../../../core/widgets/app_text_field.dart';
 import '../../../core/widgets/otp_input.dart';
@@ -162,7 +163,7 @@ class _ForgotPasswordScreenState extends ConsumerState<ForgotPasswordScreen> {
     );
   }
 
-  Widget _buildStep(dynamic theme) {
+  Widget _buildStep(AppTheme theme) {
     final colors = theme.colors;
     switch (_step) {
       case _Step.email:

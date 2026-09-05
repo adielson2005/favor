@@ -6,6 +6,7 @@ import '../../../core/errors/api_exception.dart';
 import '../../../core/providers.dart';
 import '../../../core/repositories/blocks_repository.dart';
 import '../../../core/theme/theme_controller.dart';
+import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_avatar.dart';
 import '../../../core/widgets/app_button.dart';
 import '../../../core/widgets/app_text_field.dart';
@@ -351,7 +352,7 @@ class _SecurityScreenState extends ConsumerState<SecurityScreen> {
 class _SecuritySection extends StatelessWidget {
   final String title;
   final List<Widget> children;
-  final dynamic theme;
+  final AppTheme theme;
   const _SecuritySection({required this.title, required this.children, required this.theme});
 
   @override
@@ -376,7 +377,7 @@ class _StatusRow extends StatelessWidget {
   final IconData icon;
   final String label;
   final bool ok;
-  final dynamic theme;
+  final AppTheme theme;
   final VoidCallback? onTap;
   const _StatusRow({required this.icon, required this.label, required this.ok, required this.theme, this.onTap});
 
@@ -409,7 +410,7 @@ class _ProfileRow extends StatelessWidget {
   final String label;
   final String? value;
   final VoidCallback? onTap;
-  final dynamic theme;
+  final AppTheme theme;
   const _ProfileRow({required this.icon, required this.label, required this.theme, this.value, this.onTap});
 
   @override

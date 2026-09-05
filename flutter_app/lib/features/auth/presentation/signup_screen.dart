@@ -6,6 +6,7 @@ import '../../../core/errors/api_exception.dart';
 import '../../../core/models/geo.dart';
 import '../../../core/providers.dart';
 import '../../../core/theme/theme_controller.dart';
+import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_button.dart';
 import '../../../core/widgets/app_text_field.dart';
 import '../application/auth_controller.dart';
@@ -328,7 +329,7 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
     );
   }
 
-  Widget _buildStepBody(dynamic theme) {
+  Widget _buildStepBody(AppTheme theme) {
     final colors = theme.colors;
     switch (_step) {
       case _Step.nome:
@@ -595,7 +596,7 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
 class _Requirement extends StatelessWidget {
   final bool met;
   final String label;
-  final dynamic theme;
+  final AppTheme theme;
   const _Requirement({required this.met, required this.label, required this.theme});
 
   @override
@@ -615,7 +616,7 @@ class _Requirement extends StatelessWidget {
 class _Chip extends StatelessWidget {
   final String label;
   final bool active;
-  final dynamic theme;
+  final AppTheme theme;
   final VoidCallback onTap;
   const _Chip({required this.label, required this.active, required this.theme, required this.onTap});
 

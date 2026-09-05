@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../../core/models/wallet.dart';
 import '../../../core/providers.dart';
 import '../../../core/theme/theme_controller.dart';
+import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_skeleton.dart';
 
 /// Mirrors frontend/app/wallet/index.tsx: gradient "card" balance display
@@ -122,7 +123,7 @@ class _WalletScreenState extends ConsumerState<WalletScreen> {
     );
   }
 
-  Widget _buildBalanceCard(dynamic theme, WalletBalance wallet) {
+  Widget _buildBalanceCard(AppTheme theme, WalletBalance wallet) {
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -162,7 +163,7 @@ class _WalletScreenState extends ConsumerState<WalletScreen> {
     );
   }
 
-  Widget _buildShortcuts(dynamic theme) {
+  Widget _buildShortcuts(AppTheme theme) {
     final colors = theme.colors;
     final shortcuts = [
       (Icons.qr_code, 'Depositar', () => _notAvailableYet('Depósito via Pix')),
@@ -199,7 +200,7 @@ class _WalletScreenState extends ConsumerState<WalletScreen> {
 
 class _TransactionRow extends StatelessWidget {
   final WalletTransaction transaction;
-  final dynamic theme;
+  final AppTheme theme;
   const _TransactionRow({required this.transaction, required this.theme});
 
   @override

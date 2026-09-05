@@ -9,6 +9,7 @@ import '../../../core/errors/api_exception.dart';
 import '../../../core/models/geo.dart';
 import '../../../core/providers.dart';
 import '../../../core/theme/theme_controller.dart';
+import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_button.dart';
 import '../../../core/widgets/app_text_field.dart';
 import '../../auth/application/auth_controller.dart';
@@ -248,7 +249,7 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
     );
   }
 
-  Widget _buildStepBody(dynamic theme) {
+  Widget _buildStepBody(AppTheme theme) {
     final colors = theme.colors;
     final bootstrap = ref.watch(bootstrapProvider).valueOrNull;
     final categories = bootstrap?.categories ?? <Category>[];
@@ -600,7 +601,7 @@ class _TypeOption extends StatelessWidget {
   final String body;
   final IconData icon;
   final bool active;
-  final dynamic theme;
+  final AppTheme theme;
   final VoidCallback onTap;
 
   const _TypeOption({

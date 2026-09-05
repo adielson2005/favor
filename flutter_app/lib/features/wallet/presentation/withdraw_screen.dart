@@ -7,6 +7,7 @@ import '../../../core/models/bank_account.dart';
 import '../../../core/models/wallet.dart';
 import '../../../core/providers.dart';
 import '../../../core/theme/theme_controller.dart';
+import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_button.dart';
 import '../../../core/widgets/app_text_field.dart';
 import '../../../core/widgets/empty_state.dart';
@@ -137,7 +138,7 @@ class _WithdrawScreenState extends ConsumerState<WithdrawScreen> {
     );
   }
 
-  Widget _buildDone(dynamic theme) {
+  Widget _buildDone(AppTheme theme) {
     final colors = theme.colors;
     return Center(
       child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -157,7 +158,7 @@ class _WithdrawScreenState extends ConsumerState<WithdrawScreen> {
     );
   }
 
-  Widget _buildForm(dynamic theme) {
+  Widget _buildForm(AppTheme theme) {
     final colors = theme.colors;
     final wallet = _wallet;
     final value = double.tryParse(_amount.text.replaceAll(',', '.'));

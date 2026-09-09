@@ -91,6 +91,23 @@ class AsaasProvider(PaymentProvider):
         self.webhook_secret = os.environ.get("ASAAS_WEBHOOK_SECRET", "")
         if not self.api_key:
             raise PaymentProviderUnavailable("ASAAS_API_KEY não configurada.")
+        # ASAAS's own key format tells you which environment it belongs to
+        # (aact_hmlg_ = sandbox, aact_prod_ = production) — cross-checking it
+        # against the configured host here fails loudly at startup instead of
+        # as a confusing 401 on the first real deposit, and catches the one
+        # mistake that matters when flipping this to production: pasting the
+        # new key but forgetting to also update ASAAS_BASE_URL, or vice versa.
+        is_sandbox_host = "sandbox.asaas.com" in self.base_url
+        is_prod_key = "aact_prod_" in self.api_key
+        is_sandbox_key = "aact_hmlg_" in self.api_key
+        if is_sandbox_host and is_prod_key:
+            raise PaymentProviderUnavailable(
+                "ASAAS_API_KEY é de produção (aact_prod_) mas ASAAS_BASE_URL ainda aponta para o sandbox."
+            )
+        if not is_sandbox_host and is_sandbox_key:
+            raise PaymentProviderUnavailable(
+                "ASAAS_BASE_URL aponta para produção mas ASAAS_API_KEY ainda é do sandbox (aact_hmlg_)."
+            )
 
     def _headers(self) -> dict:
         return {"access_token": self.api_key, "Content-Type": "application/json"}

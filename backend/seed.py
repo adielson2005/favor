@@ -8,6 +8,16 @@ from scripts.backfill_neighborhood_zones import ZONE_MAP
 SEED_VERSION = 3
 DEMO_PASSWORD = "faze2024"
 
+
+def _seed_demo_data_enabled() -> bool:
+    # Reference data (states/cities/categories) and the admin OWNER seed stay
+    # unconditional — a real deploy needs those too. Only the demo USERS/ORDERS/
+    # proposals (fake accounts with the publicly-known DEMO_PASSWORD, fake listings)
+    # are gated — set SEED_DEMO_DATA=false in production so they never land in a
+    # real database. Defaults to enabled so existing dev/test behavior is unchanged
+    # (several tests log in as the demo users).
+    return os.environ.get("SEED_DEMO_DATA", "true").lower() not in ("0", "false", "no")
+
 ADMIN_ROLES = [
     {"key": "OWNER", "name": "Administrador principal"},
     {"key": "MANAGER", "name": "Gerente"},
@@ -114,68 +124,70 @@ async def ensure_seed():
 
         await db.meta.update_one({"id": "seed"}, {"$set": {"version": SEED_VERSION, "updated_at": now()}}, upsert=True)
 
-    # Demo users/orders — only inserted when missing (never overwrite real content).
-    hood_by_name = {h["name"]: h async for h in db.neighborhoods.find({"city_id": "city-parauapebas"})}
-    for user in USERS:
-        existing = await db.users.find_one({"id": user["id"]})
-        if not existing:
-            user = dict(user)
-            hood = hood_by_name.get(user.pop("neighborhood"), {})
-            active = user.get("verified_email") and user.get("verified_phone")
-            user.update({
-                "password_hash": hash_password(DEMO_PASSWORD), "preference": "both",
-                "city_id": "city-parauapebas", "neighborhood_id": hood.get("id"), "blocked": False,
-                "state_id": "st-pa", "account_status": "ACTIVE" if active else "PENDING_VERIFICATION",
-                "email_verified_at": now() if user.get("verified_email") else None,
-                "phone_verified_at": now() if user.get("verified_phone") else None,
-                "member_since": "2025-08-01T00:00:00+00:00", "is_demo": True, "created_at": now(),
-            })
-            await db.users.insert_one(dict(user))
-        else:
-            updates = {}
-            if not existing.get("password_hash"):
-                updates["password_hash"] = hash_password(DEMO_PASSWORD)
-            if not existing.get("preference"):
-                updates["preference"] = "both"
-            if not existing.get("phone") and user.get("phone"):
-                updates["phone"] = user["phone"]
-            if not existing.get("state_id"):
-                updates["state_id"] = "st-pa"
-            if not existing.get("account_status"):
-                active = existing.get("verified_email") and existing.get("verified_phone")
-                updates["account_status"] = "ACTIVE" if active else "PENDING_VERIFICATION"
-            if existing.get("verified_email") and not existing.get("email_verified_at"):
-                updates["email_verified_at"] = "2025-08-01T00:00:00+00:00"
-            if existing.get("verified_phone") and not existing.get("phone_verified_at"):
-                updates["phone_verified_at"] = "2025-08-01T00:00:00+00:00"
-            # These accounts only ever carry demo data (never real user content), so
-            # rename-in-place is safe: move a still-on-the-old-domain demo account to
-            # its new address/name rather than leaving it permanently stale.
-            if not existing.get("email") or existing.get("email", "").endswith("@faze.demo"):
-                updates["email"] = user["email"]
-            if existing.get("is_demo") and existing.get("name") == "Equipe FAZÊ":
-                updates["name"] = user["name"]
-            if existing.get("is_demo") and existing.get("bio") == "Moro em Parauapebas e uso o FAZÊ para o dia a dia.":
-                updates["bio"] = user["bio"]
-            if updates:
-                await db.users.update_one({"id": user["id"]}, {"$set": updates})
+    # Demo users/orders — only inserted when missing (never overwrite real content),
+    # and only when SEED_DEMO_DATA isn't explicitly disabled (see helper above).
+    if _seed_demo_data_enabled():
+        hood_by_name = {h["name"]: h async for h in db.neighborhoods.find({"city_id": "city-parauapebas"})}
+        for user in USERS:
+            existing = await db.users.find_one({"id": user["id"]})
+            if not existing:
+                user = dict(user)
+                hood = hood_by_name.get(user.pop("neighborhood"), {})
+                active = user.get("verified_email") and user.get("verified_phone")
+                user.update({
+                    "password_hash": hash_password(DEMO_PASSWORD), "preference": "both",
+                    "city_id": "city-parauapebas", "neighborhood_id": hood.get("id"), "blocked": False,
+                    "state_id": "st-pa", "account_status": "ACTIVE" if active else "PENDING_VERIFICATION",
+                    "email_verified_at": now() if user.get("verified_email") else None,
+                    "phone_verified_at": now() if user.get("verified_phone") else None,
+                    "member_since": "2025-08-01T00:00:00+00:00", "is_demo": True, "created_at": now(),
+                })
+                await db.users.insert_one(dict(user))
+            else:
+                updates = {}
+                if not existing.get("password_hash"):
+                    updates["password_hash"] = hash_password(DEMO_PASSWORD)
+                if not existing.get("preference"):
+                    updates["preference"] = "both"
+                if not existing.get("phone") and user.get("phone"):
+                    updates["phone"] = user["phone"]
+                if not existing.get("state_id"):
+                    updates["state_id"] = "st-pa"
+                if not existing.get("account_status"):
+                    active = existing.get("verified_email") and existing.get("verified_phone")
+                    updates["account_status"] = "ACTIVE" if active else "PENDING_VERIFICATION"
+                if existing.get("verified_email") and not existing.get("email_verified_at"):
+                    updates["email_verified_at"] = "2025-08-01T00:00:00+00:00"
+                if existing.get("verified_phone") and not existing.get("phone_verified_at"):
+                    updates["phone_verified_at"] = "2025-08-01T00:00:00+00:00"
+                # These accounts only ever carry demo data (never real user content), so
+                # rename-in-place is safe: move a still-on-the-old-domain demo account to
+                # its new address/name rather than leaving it permanently stale.
+                if not existing.get("email") or existing.get("email", "").endswith("@faze.demo"):
+                    updates["email"] = user["email"]
+                if existing.get("is_demo") and existing.get("name") == "Equipe FAZÊ":
+                    updates["name"] = user["name"]
+                if existing.get("is_demo") and existing.get("bio") == "Moro em Parauapebas e uso o FAZÊ para o dia a dia.":
+                    updates["bio"] = user["bio"]
+                if updates:
+                    await db.users.update_one({"id": user["id"]}, {"$set": updates})
 
-    if await db.orders.count_documents({}) == 0:
-        for order in ORDERS:
-            sub = await db.subcategories.find_one({"category_id": order["category_id"], "name": order.pop("sub")})
-            hood = hood_by_name.get(order.pop("bairro"), {})
-            order.update({
-                "subcategory_id": (sub or {}).get("id"), "city_id": "city-parauapebas",
-                "neighborhood_id": hood.get("id"), "status": "published", "worker_id": None,
-                "photos": [], "is_demo": True, "reviewed_by_client": False, "reviewed_by_worker": False,
-                "created_at": now(),
-            })
-            await db.orders.insert_one(dict(order))
+        if await db.orders.count_documents({}) == 0:
+            for order in ORDERS:
+                sub = await db.subcategories.find_one({"category_id": order["category_id"], "name": order.pop("sub")})
+                hood = hood_by_name.get(order.pop("bairro"), {})
+                order.update({
+                    "subcategory_id": (sub or {}).get("id"), "city_id": "city-parauapebas",
+                    "neighborhood_id": hood.get("id"), "status": "published", "worker_id": None,
+                    "photos": [], "is_demo": True, "reviewed_by_client": False, "reviewed_by_worker": False,
+                    "created_at": now(),
+                })
+                await db.orders.insert_one(dict(order))
 
-    # One demo proposal so the compare screen never starts empty.
-    if await db.proposals.count_documents({}) == 0:
-        await db.proposals.insert_one({"id": "prop-demo-1", "order_id": "order-2", "worker_id": "worker-ana", "amount": 110, "message": "Já montei mais de 20 guarda-roupas. Levo minhas ferramentas e deixo tudo limpo.", "eta": "Amanhã de manhã", "status": "pending", "is_demo": True, "created_at": now()})
-        await db.proposals.insert_one({"id": "prop-demo-2", "order_id": "order-2", "worker_id": "worker-pedro", "amount": 130, "message": "Posso fazer amanhã cedo, tenho experiência com móveis planejados.", "eta": "Amanhã, 8h", "status": "pending", "is_demo": True, "created_at": now()})
+        # One demo proposal so the compare screen never starts empty.
+        if await db.proposals.count_documents({}) == 0:
+            await db.proposals.insert_one({"id": "prop-demo-1", "order_id": "order-2", "worker_id": "worker-ana", "amount": 110, "message": "Já montei mais de 20 guarda-roupas. Levo minhas ferramentas e deixo tudo limpo.", "eta": "Amanhã de manhã", "status": "pending", "is_demo": True, "created_at": now()})
+            await db.proposals.insert_one({"id": "prop-demo-2", "order_id": "order-2", "worker_id": "worker-pedro", "amount": 130, "message": "Posso fazer amanhã cedo, tenho experiência com móveis planejados.", "eta": "Amanhã, 8h", "status": "pending", "is_demo": True, "created_at": now()})
 
     # Admin-panel RBAC roles — display records only; the actual permission sets
     # live in code (admin_permissions.py) so they can't silently drift from what

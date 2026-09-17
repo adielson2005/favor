@@ -36,3 +36,17 @@ flutter run --dart-define=API_BASE_URL=http://10.0.2.2:8000   # emulador Android
 
 Testes (`flutter test`) rodam contra o backend real, não mockado — suba o
 backend antes de rodar a suíte.
+
+## Deploy em produção (Hospede Aqui)
+
+O backend é deployado via Git push na [Hospede Aqui](https://hospedeaqui.cloud/),
+apontando o app pro diretório `backend/`. Arquivos relevantes:
+
+- `backend/Procfile` — comando de start (`uvicorn server:app --host 0.0.0.0 --port $PORT`).
+- `backend/.python-version` — fixa a versão do Python usada no build.
+- `backend/requirements.txt` — detectado automaticamente pelo build.
+
+Variáveis de ambiente de produção (segredos reais, nunca commitados) ficam em
+`backend/.env.production.local` — copie cada uma para o painel da Hospede Aqui.
+Banco de dados é MongoDB Atlas (a Hospede Aqui não oferece Mongo gerenciado,
+só Postgres/MySQL/Redis), configurado via `MONGO_URL` nesse mesmo arquivo.

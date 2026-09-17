@@ -2,14 +2,19 @@
 so a real provider (Twilio, Zenvia, WhatsApp Business Cloud API...) can be dropped in
 later by writing one new class here, without touching routes or the frontend.
 
-No real provider is wired in yet (no SMS credentials exist). UnconfiguredPhoneProvider
-is what runs today: send_otp is honest about not delivering anything rather than
-pretending to — callers fall back to the same dev-mode "code in the API response"
-pattern already used for email.
+UnconfiguredPhoneProvider is what runs when SMS_PROVIDER isn't "twilio": send_otp is
+honest about not delivering anything rather than pretending to — callers fall back to
+the same dev-mode "code in the API response" pattern already used for email. That
+fallback is fine for local testing but means phone verification is not a real check
+once deployed with no provider configured, so TwilioPhoneProvider's real HTTP call
+(below) matters for production the same way AsaasProvider's real PIX call does.
 """
 import os
 from abc import ABC, abstractmethod
 from typing import Optional
+
+import requests
+from fastapi.concurrency import run_in_threadpool
 
 
 class PhoneProvider(ABC):
@@ -29,9 +34,11 @@ class UnconfiguredPhoneProvider(PhoneProvider):
 
 
 class TwilioPhoneProvider(PhoneProvider):
-    """Target shape for a real integration. Reads credentials from the environment
-    only — never accept them from a request. Not implemented; deliberately raises
-    rather than faking delivery, matching payments.py's AsaasProvider."""
+    """Real HTTP call against Twilio's documented Messages API (confirmed directly
+    against twilio.com/docs before writing this, not guessed) — Basic Auth with the
+    Account SID/Auth Token, same `requests` dependency payments.py already uses, no
+    Twilio SDK needed. Reads credentials from the environment only — never accept
+    them from a request."""
     name = "twilio"
 
     def __init__(self):
@@ -41,8 +48,19 @@ class TwilioPhoneProvider(PhoneProvider):
         if not (self.account_sid and self.auth_token and self.from_number):
             raise RuntimeError("Credenciais Twilio incompletas.")
 
+    def _send_sync(self, phone: str, code: str) -> bool:
+        resp = requests.post(
+            f"https://api.twilio.com/2010-04-01/Accounts/{self.account_sid}/Messages.json",
+            auth=(self.account_sid, self.auth_token),
+            data={"To": phone, "From": self.from_number, "Body": f"Seu código fazum é {code}. Ele expira em 10 minutos."},
+            timeout=10,
+        )
+        if resp.status_code >= 300:
+            return False
+        return True
+
     async def send_otp(self, phone: str, code: str) -> bool:
-        raise NotImplementedError("Integração Twilio ainda não implementada — configure credenciais reais e implemente a chamada HTTP.")
+        return await run_in_threadpool(self._send_sync, phone, code)
 
 
 _provider: Optional[PhoneProvider] = None

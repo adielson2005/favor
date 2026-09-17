@@ -20,6 +20,7 @@ import '../../features/services/presentation/create_order_screen.dart';
 import '../../features/wallet/presentation/bank_accounts_screen.dart';
 import '../../features/wallet/presentation/wallet_screen.dart';
 import '../../features/wallet/presentation/withdraw_screen.dart';
+import '../widgets/bottom_nav_shell.dart';
 
 /// Routes only a signed-out visitor should see — an authenticated user
 /// landing on one of these (e.g. after a hot-restart with a valid session)
@@ -54,26 +55,34 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       return null;
     },
     routes: [
-      GoRoute(path: '/', builder: (context, state) => const _RootRoute()),
-      GoRoute(path: '/create', builder: (context, state) => const CreateOrderScreen()),
-      GoRoute(
-        path: '/order/:id',
-        builder: (context, state) => OrderDetailScreen(orderId: state.pathParameters['id']!),
+      // Everything authenticated lives under this shell so the bottom nav
+      // (Home/Pedir/Carteira/Perfil) stays visible app-wide, including on
+      // detail screens like order/chat — not just the 4 tab roots.
+      ShellRoute(
+        builder: (context, state, child) => BottomNavShell(child: child),
+        routes: [
+          GoRoute(path: '/', builder: (context, state) => const _RootRoute()),
+          GoRoute(path: '/create', builder: (context, state) => const CreateOrderScreen()),
+          GoRoute(
+            path: '/order/:id',
+            builder: (context, state) => OrderDetailScreen(orderId: state.pathParameters['id']!),
+          ),
+          GoRoute(
+            path: '/chat/:id',
+            builder: (context, state) => ChatScreen(orderId: state.pathParameters['id']!),
+          ),
+          GoRoute(path: '/notifications', builder: (context, state) => const NotificationsScreen()),
+          GoRoute(path: '/profile', builder: (context, state) => const ProfileScreen()),
+          GoRoute(path: '/security', builder: (context, state) => const SecurityScreen()),
+          GoRoute(
+            path: '/user/:id',
+            builder: (context, state) => PublicProfileScreen(userId: state.pathParameters['id']!),
+          ),
+          GoRoute(path: '/wallet', builder: (context, state) => const WalletScreen()),
+          GoRoute(path: '/wallet/bank-accounts', builder: (context, state) => const BankAccountsScreen()),
+          GoRoute(path: '/wallet/withdraw', builder: (context, state) => const WithdrawScreen()),
+        ],
       ),
-      GoRoute(
-        path: '/chat/:id',
-        builder: (context, state) => ChatScreen(orderId: state.pathParameters['id']!),
-      ),
-      GoRoute(path: '/notifications', builder: (context, state) => const NotificationsScreen()),
-      GoRoute(path: '/profile', builder: (context, state) => const ProfileScreen()),
-      GoRoute(path: '/security', builder: (context, state) => const SecurityScreen()),
-      GoRoute(
-        path: '/user/:id',
-        builder: (context, state) => PublicProfileScreen(userId: state.pathParameters['id']!),
-      ),
-      GoRoute(path: '/wallet', builder: (context, state) => const WalletScreen()),
-      GoRoute(path: '/wallet/bank-accounts', builder: (context, state) => const BankAccountsScreen()),
-      GoRoute(path: '/wallet/withdraw', builder: (context, state) => const WithdrawScreen()),
       GoRoute(path: '/auth/welcome', builder: (context, state) => const WelcomeScreen()),
       GoRoute(path: '/auth/login', builder: (context, state) => const LoginScreen()),
       GoRoute(path: '/auth/signup', builder: (context, state) => const SignupScreen()),

@@ -70,6 +70,16 @@ class AuthRepository {
     return AuthResult.fromJson(json);
   }
 
+  /// Links a Google account to the already-authenticated caller — separate
+  /// from loginWithGoogle, which creates a session (possibly a new account).
+  /// See routes/auth.py's POST /auth/google/link.
+  Future<void> linkGoogle({required String idToken, String? nonce}) => _client.post<Map<String, dynamic>>(
+        '/auth/google/link',
+        body: {'id_token': idToken, 'nonce': nonce},
+      );
+
+  Future<void> unlinkGoogle() => _client.delete<Map<String, dynamic>>('/auth/google/unlink');
+
   Future<AppUser> me() async {
     final json = await _client.get<Map<String, dynamic>>('/auth/me');
     return AppUser.fromJson(json);

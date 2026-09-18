@@ -13,12 +13,16 @@ import '../../features/chat/presentation/chat_screen.dart';
 import '../../features/home/presentation/home_screen.dart';
 import '../../features/notifications/presentation/notifications_screen.dart';
 import '../../features/orders/presentation/order_detail_screen.dart';
+import '../../features/orders/presentation/orders_list_screen.dart';
 import '../../features/profile/presentation/profile_screen.dart';
 import '../../features/profile/presentation/public_profile_screen.dart';
 import '../../features/profile/presentation/security_screen.dart';
+import '../../features/profile/presentation/settings_screen.dart';
 import '../../features/services/presentation/create_order_screen.dart';
 import '../../features/wallet/presentation/bank_accounts_screen.dart';
+import '../../features/wallet/presentation/deposit_screen.dart';
 import '../../features/wallet/presentation/wallet_screen.dart';
+import '../../features/wallet/presentation/wallet_statement_screen.dart';
 import '../../features/wallet/presentation/withdraw_screen.dart';
 import '../widgets/bottom_nav_shell.dart';
 
@@ -64,6 +68,13 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/', builder: (context, state) => const _RootRoute()),
           GoRoute(path: '/create', builder: (context, state) => const CreateOrderScreen()),
           GoRoute(
+            path: '/orders',
+            builder: (context, state) => OrdersListScreen(
+              categoryId: state.uri.queryParameters['category_id'],
+              categoryName: state.uri.queryParameters['category_name'],
+            ),
+          ),
+          GoRoute(
             path: '/order/:id',
             builder: (context, state) => OrderDetailScreen(orderId: state.pathParameters['id']!),
           ),
@@ -74,11 +85,20 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(path: '/notifications', builder: (context, state) => const NotificationsScreen()),
           GoRoute(path: '/profile', builder: (context, state) => const ProfileScreen()),
           GoRoute(path: '/security', builder: (context, state) => const SecurityScreen()),
+          GoRoute(path: '/settings', builder: (context, state) => const SettingsScreen()),
           GoRoute(
             path: '/user/:id',
             builder: (context, state) => PublicProfileScreen(userId: state.pathParameters['id']!),
           ),
           GoRoute(path: '/wallet', builder: (context, state) => const WalletScreen()),
+          GoRoute(path: '/wallet/deposit', builder: (context, state) => const DepositScreen()),
+          GoRoute(
+            path: '/wallet/statement',
+            builder: (context, state) => WalletStatementScreen(
+              type: state.uri.queryParameters['type'],
+              title: state.uri.queryParameters['title'] ?? 'Extrato',
+            ),
+          ),
           GoRoute(path: '/wallet/bank-accounts', builder: (context, state) => const BankAccountsScreen()),
           GoRoute(path: '/wallet/withdraw', builder: (context, state) => const WithdrawScreen()),
         ],

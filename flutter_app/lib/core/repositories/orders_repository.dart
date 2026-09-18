@@ -105,6 +105,13 @@ class OrdersRepository {
   Future<void> complete(String orderId) => _client.post('/orders/$orderId/complete');
 
   /// Client only, published|accepted → cancelled. Refunds any held payment
-  /// server-side if one exists (same FASE 10 caveat as [complete]).
+  /// server-side if one exists.
   Future<void> cancel(String orderId) => _client.post('/orders/$orderId/cancel');
+
+  /// Mirrors POST /reviews (backend/routes/public.py) — only callable once
+  /// per (order, reviewer), only after the order is completed, and only
+  /// rating the other participant of that same order; the backend enforces
+  /// all three, this just sends the same fields.
+  Future<void> createReview({required String orderId, required String toId, required int stars, String comment = ''}) =>
+      _client.post('/reviews', body: {'order_id': orderId, 'to_id': toId, 'stars': stars, 'comment': comment});
 }

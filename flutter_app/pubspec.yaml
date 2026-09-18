@@ -58,6 +58,7 @@ dependencies:
   # RN side (frontend/app/create.tsx), base64-encodes the picked image the
   # same way so it can go straight into the same POST /orders `photos` field.
   image_picker: ^1.1.2
+  google_sign_in: ^7.2.0
 
 dev_dependencies:
   flutter_test:

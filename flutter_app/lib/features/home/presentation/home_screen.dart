@@ -18,11 +18,9 @@ import 'order_card.dart';
 /// toggle, mode-dependent hero CTA, horizontally-scrolling categories from
 /// the real /bootstrap, and a live orders list (own orders as client,
 /// nearby published orders as worker) from the real /orders.
-///
-/// Screens this links to that aren't built yet (create pedido, explore,
-/// wallet, notifications, profile, order detail, activity) show a "not
-/// available yet" snackbar instead of a broken/fake navigation — those are
-/// their own later phases (FASE 6/9/10/11/12), not invented here.
+/// "Ver todos" / "Ver pedidos disponíveis" / category taps all open
+/// OrdersListScreen (the same fetchOrders shape as this screen's own _load,
+/// just uncapped and optionally category-filtered).
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
 
@@ -69,12 +67,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         setState(() => _loading = false);
       }
     }
-  }
-
-  void _notAvailableYet() {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Essa parte do app ainda não foi construída nesta fase.')),
-    );
   }
 
   @override
@@ -263,7 +255,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                     const SizedBox(height: 12),
                     AppButton(title: 'Pedir ajuda', theme: theme, onPressed: () => context.push('/create')),
                   ] else
-                    AppButton(title: 'Ver pedidos disponíveis', theme: theme, onPressed: _notAvailableYet),
+                    AppButton(title: 'Ver pedidos disponíveis', theme: theme, onPressed: () => context.push('/orders')),
                 ]),
               ),
 
@@ -293,7 +285,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                               return Padding(
                                 padding: const EdgeInsets.only(right: 10),
                                 child: InkWell(
-                                  onTap: _notAvailableYet,
+                                  onTap: () => context.push(
+                                      '/orders?category_id=${Uri.encodeComponent(cat.id)}&category_name=${Uri.encodeComponent(cat.name)}'),
                                   borderRadius: BorderRadius.circular(16),
                                   child: Container(
                                     width: 88,
@@ -331,7 +324,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                     Text(isClient ? 'Seus pedidos' : 'Pedidos perto de você',
                         style: theme.type.h2.copyWith(fontSize: 17)),
                     TextButton(
-                      onPressed: _notAvailableYet,
+                      onPressed: () => context.push('/orders'),
                       child: Text('Ver todos', style: TextStyle(color: colors.primary, fontWeight: FontWeight.bold, fontSize: 13)),
                     ),
                   ]),

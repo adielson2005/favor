@@ -41,6 +41,43 @@ class Payment {
       );
 }
 
+/// Mirrors POST/GET /wallet/deposits — a PIX charge created via the ASAAS
+/// gateway (backend/payments.py). qrCodeImage is a base64 PNG (no data:
+/// prefix, backend/payments.py hands it back exactly as ASAAS returns it);
+/// qrCodePayload is the "copia e cola" string.
+class Deposit {
+  final String id;
+  final double amount;
+  final String status;
+  final String? provider;
+  final String? qrCodeImage;
+  final String? qrCodePayload;
+  final String? expiresAt;
+  final String createdAt;
+
+  const Deposit({
+    required this.id,
+    required this.amount,
+    required this.status,
+    this.provider,
+    this.qrCodeImage,
+    this.qrCodePayload,
+    this.expiresAt,
+    required this.createdAt,
+  });
+
+  factory Deposit.fromJson(Map<String, dynamic> json) => Deposit(
+        id: json['id'] as String,
+        amount: (json['amount'] as num).toDouble(),
+        status: json['status'] as String,
+        provider: json['provider'] as String?,
+        qrCodeImage: json['qr_code_image'] as String?,
+        qrCodePayload: json['qr_code_payload'] as String?,
+        expiresAt: json['expires_at'] as String?,
+        createdAt: json['created_at'] as String? ?? '',
+      );
+}
+
 class Withdrawal {
   final String id;
   final double amount;

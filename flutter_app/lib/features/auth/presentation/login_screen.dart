@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/errors/api_exception.dart';
+import '../../../core/services/google_auth_service.dart';
 import '../../../core/theme/theme_controller.dart';
 import '../../../core/widgets/app_button.dart';
 import '../../../core/widgets/app_text_field.dart';
@@ -10,11 +11,10 @@ import '../application/auth_controller.dart';
 
 /// Mirrors frontend/app/auth/login.tsx: identifier (email or phone) + senha,
 /// "esqueci minha senha", link to signup, and a demo-accounts helper for
-/// quick manual testing during development. Google login is present in the
-/// UI but shows the same "not configured yet" message the RN app shows,
-/// since EXPO_PUBLIC_GOOGLE_CLIENT_ID/GOOGLE_CLIENT_ID aren't set in this
-/// environment — wiring the real google_sign_in flow is a separate,
-/// deliberately deferred step once real credentials exist.
+/// quick manual testing during development. Google login triggers the real
+/// google_sign_in flow (GoogleAuthService) and only falls back to a
+/// "not configured" message if GOOGLE_SERVER_CLIENT_ID wasn't passed at
+/// build time — see google_auth_service.dart.
 class LoginScreen extends ConsumerStatefulWidget {
   const LoginScreen({super.key});
 
@@ -64,20 +64,26 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     }
   }
 
-  void _pressGoogle() {
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Google ainda não configurado'),
-        content: const Text(
-          'Defina EXPO_PUBLIC_GOOGLE_CLIENT_ID (frontend) e GOOGLE_CLIENT_ID '
-          '(backend) para ativar.',
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('OK')),
-        ],
-      ),
-    );
+  Future<void> _pressGoogle() async {
+    if (_loading) return;
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final google = await GoogleAuthService.instance.signIn();
+      await ref.read(authControllerProvider.notifier).loginWithGoogle(
+            idToken: google.idToken,
+            nonce: google.nonce,
+          );
+      if (mounted) context.go('/');
+    } on GoogleAuthException catch (e) {
+      if (!e.cancelled && mounted) setState(() => _error = e.message);
+    } on ApiException catch (e) {
+      setState(() => _error = e.message);
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
   }
 
   @override

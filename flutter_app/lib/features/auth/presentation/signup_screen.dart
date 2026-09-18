@@ -15,8 +15,10 @@ import '../application/auth_controller.dart';
 /// → telefone → senha → local → preferencia. Same field-level validation
 /// rules per step (`canContinue` in the RN file), same cascading
 /// state→city→neighborhood fetch, same password strength/requirement
-/// indicators. Google signup shows the same "not configured" dialog as
-/// LoginScreen, for the same reason (no real client ID in this environment).
+/// indicators. No separate Google button here — LoginScreen's Google flow
+/// already creates a brand-new account on first sign-in when no match is
+/// found (see routes/auth.py's POST /auth/google), so this wizard stays the
+/// password-only path.
 class SignupScreen extends ConsumerStatefulWidget {
   const SignupScreen({super.key});
 

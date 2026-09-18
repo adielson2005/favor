@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../../core/errors/api_exception.dart';
 import '../../../core/providers.dart';
 import '../../../core/repositories/blocks_repository.dart';
+import '../../../core/services/google_auth_service.dart';
 import '../../../core/theme/theme_controller.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_avatar.dart';
@@ -17,12 +18,11 @@ import '../../auth/application/auth_controller.dart';
 /// and hand back a fresh session token — see AuthRepository.changeEmail's
 /// doc), quick links into wallet, and blocked users.
 ///
-/// Google link/unlink is deliberately NOT wired here: the RN app itself only
-/// enables it when EXPO_PUBLIC_GOOGLE_CLIENT_ID/GOOGLE_CLIENT_ID are
-/// configured, and this Flutter build has never wired the real google_sign_in
-/// flow (see login_screen.dart's _pressGoogle) — so the row shows the same
-/// "not configured" stub instead of half-implementing an OAuth flow no other
-/// screen supports yet.
+/// "Google" row calls the real POST /auth/google/link once tapped — there's
+/// no GET endpoint yet to report whether an account already has Google
+/// linked, so the row's label stays "Não conectado" even after a successful
+/// link this session (a real but narrower gap than the fully-stubbed button
+/// this used to be).
 class SecurityScreen extends ConsumerStatefulWidget {
   const SecurityScreen({super.key});
 
@@ -32,6 +32,8 @@ class SecurityScreen extends ConsumerStatefulWidget {
 
 class _SecurityScreenState extends ConsumerState<SecurityScreen> {
   List<BlockedUser>? _blocks;
+  bool _googleLinked = false;
+  bool _linkingGoogle = false;
 
   @override
   void initState() {
@@ -52,18 +54,21 @@ class _SecurityScreenState extends ConsumerState<SecurityScreen> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
   }
 
-  void _pressGoogle() {
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Google ainda não configurado'),
-        content: const Text(
-          'Defina EXPO_PUBLIC_GOOGLE_CLIENT_ID (frontend) e GOOGLE_CLIENT_ID '
-          '(backend) para ativar.',
-        ),
-        actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('OK'))],
-      ),
-    );
+  Future<void> _pressGoogle() async {
+    if (_linkingGoogle || _googleLinked) return;
+    setState(() => _linkingGoogle = true);
+    try {
+      final google = await GoogleAuthService.instance.signIn();
+      await ref.read(authControllerProvider.notifier).linkGoogle(idToken: google.idToken, nonce: google.nonce);
+      if (mounted) setState(() => _googleLinked = true);
+      _showSnack('Conta Google vinculada.');
+    } on GoogleAuthException catch (e) {
+      if (!e.cancelled) _showSnack(e.message);
+    } on ApiException catch (e) {
+      _showSnack(e.message);
+    } finally {
+      if (mounted) setState(() => _linkingGoogle = false);
+    }
   }
 
   void _openChangeEmail() {
@@ -288,7 +293,13 @@ class _SecurityScreenState extends ConsumerState<SecurityScreen> {
                   _StatusRow(icon: Icons.verified_user_outlined, label: 'Identidade verificada', ok: me.verifiedIdentity, theme: theme),
                 ]),
                 _SecuritySection(title: 'Contas conectadas', theme: theme, children: [
-                  _ProfileRow(icon: Icons.g_mobiledata, label: 'Google', value: 'Não conectado', theme: theme, onTap: _pressGoogle),
+                  _ProfileRow(
+                    icon: Icons.g_mobiledata,
+                    label: 'Google',
+                    value: _googleLinked ? 'Conectado' : 'Não conectado',
+                    theme: theme,
+                    onTap: _googleLinked ? null : _pressGoogle,
+                  ),
                 ]),
                 _SecuritySection(title: 'Acesso', theme: theme, children: [
                   _ProfileRow(icon: Icons.lock_outline, label: 'Alterar senha', theme: theme, onTap: () => context.push('/profile')),

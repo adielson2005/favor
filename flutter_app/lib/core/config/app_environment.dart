@@ -21,6 +21,14 @@ class AppEnvironment {
     defaultValue: 'development',
   );
 
+  /// The *Web application* OAuth client ID from Google Cloud Console — same
+  /// value as the backend's GOOGLE_CLIENT_ID env var (routes/auth.py verifies
+  /// the ID token against this exact audience). Passed as `serverClientId` to
+  /// GoogleSignIn.initialize(); required on Android since this app has no
+  /// google-services.json. Empty by default — google_auth_service.dart treats
+  /// that as "not configured" the same way the backend does.
+  static const String googleServerClientId = String.fromEnvironment('GOOGLE_SERVER_CLIENT_ID');
+
   static AppEnv get current => switch (envName) {
         'production' => AppEnv.production,
         'staging' => AppEnv.staging,

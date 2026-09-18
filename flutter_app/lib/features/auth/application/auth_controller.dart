@@ -91,6 +91,11 @@ class AuthController extends StateNotifier<AuthState> {
     return result;
   }
 
+  Future<void> linkGoogle({required String idToken, String? nonce}) =>
+      _repository.linkGoogle(idToken: idToken, nonce: nonce);
+
+  Future<void> unlinkGoogle() => _repository.unlinkGoogle();
+
   Future<void> refreshUser() async {
     try {
       final user = await _repository.me();

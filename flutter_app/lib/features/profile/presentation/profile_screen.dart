@@ -328,7 +328,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
           children: [
             Align(
               alignment: Alignment.centerRight,
-              child: IconButton(onPressed: () => _showSnack('Configurações ainda não foram construídas nesta fase.'), icon: Icon(Icons.settings_outlined, color: colors.muted)),
+              child: IconButton(onPressed: () => context.push('/settings'), icon: Icon(Icons.settings_outlined, color: colors.muted)),
             ),
             Center(
               child: Column(children: [

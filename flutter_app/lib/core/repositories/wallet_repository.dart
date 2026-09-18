@@ -17,8 +17,18 @@ class WalletRepository {
     return WalletBalance.fromJson(json);
   }
 
-  Future<List<WalletTransaction>> fetchTransactions({int limit = 30, int offset = 0}) async {
-    final json = await _client.get<List<dynamic>>('/wallet/transactions', query: {'limit': limit, 'offset': offset});
+  Future<List<WalletTransaction>> fetchTransactions({
+    int limit = 30,
+    int offset = 0,
+    String? type,
+    String? status,
+    String? direction,
+  }) async {
+    final query = <String, dynamic>{'limit': limit, 'offset': offset};
+    if (type != null) query['type'] = type;
+    if (status != null) query['status'] = status;
+    if (direction != null) query['direction'] = direction;
+    final json = await _client.get<List<dynamic>>('/wallet/transactions', query: query);
     return json.map((t) => WalletTransaction.fromJson(t as Map<String, dynamic>)).toList();
   }
 
@@ -70,6 +80,23 @@ class WalletRepository {
 
   Future<void> removeBankAccount(String accountId, {required String password}) =>
       _client.delete('/bank-accounts/$accountId', body: {'password': password});
+
+  /// [document] (CPF/CNPJ) is only required the first time this user
+  /// deposits — backend/routes/wallet.py returns a 400 asking for it if
+  /// missing, distinct from any other provider error (see DepositScreen).
+  Future<Deposit> createDeposit({required double amount, String? document}) async {
+    final json = await _client.post<Map<String, dynamic>>(
+      '/wallet/deposits',
+      body: {'amount': amount, 'method': 'pix', 'document': document},
+      headers: {'Idempotency-Key': newIdempotencyKey()},
+    );
+    return Deposit.fromJson(json);
+  }
+
+  Future<Deposit> fetchDeposit(String depositId) async {
+    final json = await _client.get<Map<String, dynamic>>('/wallet/deposits/$depositId');
+    return Deposit.fromJson(json);
+  }
 
   Future<Withdrawal> requestWithdrawal({
     required double amount,

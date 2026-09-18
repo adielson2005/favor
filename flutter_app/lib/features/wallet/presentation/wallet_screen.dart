@@ -8,14 +8,13 @@ import '../../../core/providers.dart';
 import '../../../core/theme/theme_controller.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_skeleton.dart';
+import '../../../core/widgets/wallet_transaction_row.dart';
 
 /// Mirrors frontend/app/wallet/index.tsx: gradient "card" balance display
 /// (same brand navy→green gradient), show/hide toggle persisted the same
-/// way, and a recent-transactions list from the real ledger. Deposit via
-/// PIX/ASAAS is intentionally not wired here — it needs a publicly
-/// reachable webhook URL this environment doesn't have yet (the same
-/// production-readiness gap already flagged earlier this session), so the
-/// button is present but honestly says so rather than pretending to work.
+/// way, and a recent-transactions list from the real ledger. "Depositar"
+/// opens DepositScreen (real ASAAS PIX charge + webhook confirmation, now
+/// that production has a public webhook URL).
 class WalletScreen extends ConsumerStatefulWidget {
   const WalletScreen({super.key});
 
@@ -67,12 +66,6 @@ class _WalletScreenState extends ConsumerState<WalletScreen> {
 
   String _money(double v) => _hidden ? 'R\$ ••••' : 'R\$ ${v.toStringAsFixed(2).replaceAll('.', ',')}';
 
-  void _notAvailableYet(String feature) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('$feature ainda não foi construído nesta fase.')),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final theme = ref.watch(themeProviderForScreens);
@@ -112,7 +105,7 @@ class _WalletScreenState extends ConsumerState<WalletScreen> {
                     if (_recent.isEmpty)
                       Text('Nenhuma movimentação ainda.', style: theme.type.body.copyWith(color: colors.muted))
                     else
-                      ..._recent.map((t) => _TransactionRow(transaction: t, theme: theme)),
+                      ..._recent.map((t) => WalletTransactionRow(transaction: t, theme: theme)),
                   ],
                 ],
               ),
@@ -166,10 +159,10 @@ class _WalletScreenState extends ConsumerState<WalletScreen> {
   Widget _buildShortcuts(AppTheme theme) {
     final colors = theme.colors;
     final shortcuts = [
-      (Icons.qr_code, 'Depositar', () => _notAvailableYet('Depósito via Pix')),
+      (Icons.qr_code, 'Depositar', () => context.push('/wallet/deposit')),
       (Icons.arrow_upward, 'Sacar', () => context.push('/wallet/withdraw')),
-      (Icons.trending_up, 'Ganhos', () => _notAvailableYet('Extrato de ganhos')),
-      (Icons.receipt_long_outlined, 'Extrato', () => _notAvailableYet('Extrato completo')),
+      (Icons.trending_up, 'Ganhos', () => context.push('/wallet/statement?type=EARNING&title=${Uri.encodeComponent('Ganhos')}')),
+      (Icons.receipt_long_outlined, 'Extrato', () => context.push('/wallet/statement?title=${Uri.encodeComponent('Extrato completo')}')),
       (Icons.account_balance_outlined, 'Contas', () => context.push('/wallet/bank-accounts')),
     ];
     return Row(
@@ -194,44 +187,6 @@ class _WalletScreenState extends ConsumerState<WalletScreen> {
                 ),
               ))
           .toList(),
-    );
-  }
-}
-
-class _TransactionRow extends StatelessWidget {
-  final WalletTransaction transaction;
-  final AppTheme theme;
-  const _TransactionRow({required this.transaction, required this.theme});
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = theme.colors;
-    final isIn = transaction.direction == 'IN';
-    final sign = isIn ? '+' : (transaction.direction == 'OUT' ? '-' : '');
-    final color = isIn ? colors.green : (transaction.direction == 'OUT' ? colors.danger : colors.muted);
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Row(children: [
-        Container(
-          width: 36,
-          height: 36,
-          decoration: BoxDecoration(color: colors.alt, shape: BoxShape.circle),
-          child: Icon(
-            isIn ? Icons.arrow_downward : Icons.arrow_upward,
-            size: 16,
-            color: colors.muted,
-          ),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(transaction.description, style: theme.type.small.copyWith(fontWeight: FontWeight.bold)),
-            Text(transaction.status, style: theme.type.micro.copyWith(color: colors.faint)),
-          ]),
-        ),
-        Text('$sign R\$ ${transaction.amount.toStringAsFixed(2)}',
-            style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 13)),
-      ]),
     );
   }
 }

@@ -228,6 +228,34 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
     );
   }
 
+  // ---------- review ----------
+
+  /// Does not pop the sheet itself — _ReviewSheet does that only after this
+  /// completes without throwing, so a failed submit leaves the sheet open
+  /// with the error visible instead of silently closing.
+  Future<void> _submitReview({required String toId, required int stars, required String comment}) async {
+    await ref.read(ordersRepositoryProvider).createReview(
+          orderId: widget.orderId,
+          toId: toId,
+          stars: stars,
+          comment: comment,
+        );
+    await _load();
+  }
+
+  void _openReview({required String toId, required String toName}) {
+    final theme = ref.read(themeProviderForScreens);
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheetContext) => _ReviewSheet(
+        toName: toName,
+        theme: theme,
+        onSubmit: (stars, comment) => _submitReview(toId: toId, stars: stars, comment: comment),
+      ),
+    );
+  }
+
   void _showError(String title, String message) {
     showDialog(
       context: context,
@@ -405,12 +433,29 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
           child: Row(children: [
             Icon(Icons.check_circle, color: colors.green, size: 20),
             const SizedBox(width: 10),
-            Expanded(
-              child: Text('Serviço concluído. Avaliação ainda não foi construída nesta fase.',
-                  style: theme.type.small.copyWith(color: colors.ink)),
-            ),
+            Expanded(child: Text('Serviço concluído.', style: theme.type.small.copyWith(color: colors.ink))),
           ]),
         ));
+        if (_isOwner || isWorker) {
+          final alreadyReviewed = _isOwner ? order.reviewedByClient : order.reviewedByWorker;
+          final toId = _isOwner ? order.workerId : order.clientId;
+          final toName = _isOwner ? (order.worker?.name ?? 'o fazedor') : (order.client?.name ?? 'quem pediu');
+          steps.add(const SizedBox(height: 12));
+          if (alreadyReviewed) {
+            steps.add(Row(children: [
+              Icon(Icons.star, size: 16, color: colors.amber),
+              const SizedBox(width: 6),
+              Text('Você já avaliou $toName.', style: theme.type.small.copyWith(color: colors.muted)),
+            ]));
+          } else if (toId != null) {
+            steps.add(AppButton(
+              title: 'Avaliar $toName',
+              theme: theme,
+              variant: AppButtonVariant.secondary,
+              onPressed: () => _openReview(toId: toId, toName: toName),
+            ));
+          }
+        }
       case 'cancelled':
         steps.add(Container(
           padding: const EdgeInsets.all(16),
@@ -602,6 +647,84 @@ class _ProposalCard extends StatelessWidget {
           const SizedBox(height: 10),
           AppButton(title: 'Aceitar proposta', theme: theme, loading: acting, onPressed: acting ? null : onAccept),
         ],
+      ]),
+    );
+  }
+}
+
+/// Star rating + optional comment, submitted via [onSubmit] — POST /reviews
+/// (backend/routes/public.py's create_review). Manages its own
+/// submitting/error state so a failed submit leaves the sheet open with the
+/// error visible instead of silently closing.
+class _ReviewSheet extends StatefulWidget {
+  final String toName;
+  final AppTheme theme;
+  final Future<void> Function(int stars, String comment) onSubmit;
+  const _ReviewSheet({required this.toName, required this.theme, required this.onSubmit});
+
+  @override
+  State<_ReviewSheet> createState() => _ReviewSheetState();
+}
+
+class _ReviewSheetState extends State<_ReviewSheet> {
+  int _stars = 5;
+  final _comment = TextEditingController();
+  bool _submitting = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _comment.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    setState(() {
+      _submitting = true;
+      _error = null;
+    });
+    try {
+      await widget.onSubmit(_stars, _comment.text.trim());
+      if (mounted) Navigator.pop(context);
+    } on ApiException catch (e) {
+      if (mounted) setState(() => _error = e.message);
+    } finally {
+      if (mounted) setState(() => _submitting = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = widget.theme;
+    final colors = theme.colors;
+    return Padding(
+      padding: EdgeInsets.only(
+        left: 20,
+        right: 20,
+        top: 20,
+        bottom: MediaQuery.of(context).viewInsets.bottom + 20,
+      ),
+      child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Text('Avaliar ${widget.toName}', style: theme.type.h2.copyWith(fontSize: 16)),
+        const SizedBox(height: 16),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: List.generate(5, (i) {
+            final filled = i < _stars;
+            return IconButton(
+              onPressed: () => setState(() => _stars = i + 1),
+              icon: Icon(filled ? Icons.star : Icons.star_border, color: colors.amber, size: 32),
+            );
+          }),
+        ),
+        const SizedBox(height: 8),
+        AppTextField(controller: _comment, theme: theme, label: 'Comentário (opcional)', placeholder: 'Como foi a experiência?'),
+        if (_error != null) ...[
+          const SizedBox(height: 10),
+          Text(_error!, style: theme.type.small.copyWith(color: colors.danger)),
+        ],
+        const SizedBox(height: 16),
+        AppButton(title: 'Enviar avaliação', theme: theme, loading: _submitting, onPressed: _submitting ? null : _submit),
       ]),
     );
   }

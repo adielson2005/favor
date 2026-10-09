@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -15,6 +16,12 @@ import '../application/auth_controller.dart';
 /// google_sign_in flow (GoogleAuthService) and only falls back to a
 /// "not configured" message if GOOGLE_SERVER_CLIENT_ID wasn't passed at
 /// build time — see google_auth_service.dart.
+///
+/// The demo-accounts helper (below) is gated behind kDebugMode so a
+/// `flutter build apk --release` — what actually gets installed on a real
+/// device or shared with testers — never ships the demo emails/password as
+/// extractable strings, and never gives anyone who gets the APK a working
+/// login shortcut. `flutter run` in debug mode keeps it for the dev team.
 class LoginScreen extends ConsumerStatefulWidget {
   const LoginScreen({super.key});
 
@@ -203,46 +210,48 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                   ),
                 ),
               ),
-              const SizedBox(height: 8),
-              Center(
-                child: TextButton(
-                  onPressed: () => setState(() => _showDemo = !_showDemo),
-                  child: Text(
-                    _showDemo ? 'Ocultar contas demo' : 'Ver contas demo',
-                    style: theme.type.small.copyWith(color: colors.faint),
+              if (kDebugMode) ...[
+                const SizedBox(height: 8),
+                Center(
+                  child: TextButton(
+                    onPressed: () => setState(() => _showDemo = !_showDemo),
+                    child: Text(
+                      _showDemo ? 'Ocultar contas demo' : 'Ver contas demo',
+                      style: theme.type.small.copyWith(color: colors.faint),
+                    ),
                   ),
                 ),
-              ),
-              if (_showDemo)
-                Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(color: colors.alt, borderRadius: BorderRadius.circular(16)),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('Preenche o formulário, senha $_demoPassword',
-                          style: theme.type.micro.copyWith(color: colors.faint)),
-                      const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 8,
-                        children: _demoAccounts.map((acc) {
-                          return OutlinedButton(
-                            onPressed: () => setState(() {
-                              _identifier.text = acc.$2;
-                              _password.text = _demoPassword;
-                            }),
-                            style: OutlinedButton.styleFrom(
-                              side: BorderSide(color: colors.border),
-                              backgroundColor: colors.surface,
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
-                            ),
-                            child: Text(acc.$1, style: theme.type.small.copyWith(color: colors.ink)),
-                          );
-                        }).toList(),
-                      ),
-                    ],
+                if (_showDemo)
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(color: colors.alt, borderRadius: BorderRadius.circular(16)),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Preenche o formulário, senha $_demoPassword',
+                            style: theme.type.micro.copyWith(color: colors.faint)),
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 8,
+                          children: _demoAccounts.map((acc) {
+                            return OutlinedButton(
+                              onPressed: () => setState(() {
+                                _identifier.text = acc.$2;
+                                _password.text = _demoPassword;
+                              }),
+                              style: OutlinedButton.styleFrom(
+                                side: BorderSide(color: colors.border),
+                                backgroundColor: colors.surface,
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
+                              ),
+                              child: Text(acc.$1, style: theme.type.small.copyWith(color: colors.ink)),
+                            );
+                          }).toList(),
+                        ),
+                      ],
+                    ),
                   ),
-                ),
+              ],
               const SizedBox(height: 24),
             ],
           ),

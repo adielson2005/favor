@@ -37,16 +37,17 @@ flutter run --dart-define=API_BASE_URL=http://10.0.2.2:8000   # emulador Android
 Testes (`flutter test`) rodam contra o backend real, não mockado — suba o
 backend antes de rodar a suíte.
 
-## Deploy em produção (Hospede Aqui)
+## Deploy em produção (Render)
 
-O backend é deployado via Git push na [Hospede Aqui](https://hospedeaqui.cloud/),
-apontando o app pro diretório `backend/`. Arquivos relevantes:
-
-- `backend/Procfile` — comando de start (`uvicorn server:app --host 0.0.0.0 --port $PORT`).
-- `backend/.python-version` — fixa a versão do Python usada no build.
-- `backend/requirements.txt` — detectado automaticamente pelo build.
+O backend é deployado no [Render](https://render.com/) a partir do `Dockerfile`
+na raiz do repositório (contexto = raiz, mas o build só copia `backend/` pra
+dentro da imagem — veja o próprio `Dockerfile`). `render.yaml` descreve o
+serviço como Blueprint: crie o Web Service escolhendo "Docker" como ambiente,
+ou use "New + → Blueprint" apontando pra este repositório.
 
 Variáveis de ambiente de produção (segredos reais, nunca commitados) ficam em
-`backend/.env.production.local` — copie cada uma para o painel da Hospede Aqui.
-Banco de dados é MongoDB Atlas (a Hospede Aqui não oferece Mongo gerenciado,
-só Postgres/MySQL/Redis), configurado via `MONGO_URL` nesse mesmo arquivo.
+`backend/.env.production.local` — copie cada uma para o painel do Render.
+`SEED_DEMO_DATA=false` já vem fixo no `render.yaml` (evita recriar as contas
+demo com senha pública no banco de produção). Banco de dados é MongoDB Atlas
+(configurado via `MONGO_URL` no mesmo arquivo), independente de qual serviço
+hospeda o backend.
